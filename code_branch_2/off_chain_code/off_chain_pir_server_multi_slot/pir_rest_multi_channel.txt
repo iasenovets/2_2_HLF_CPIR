@@ -1,0 +1,493 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"sync"
+
+	"github.com/tuneinsight/lattigo/v6/core/rlwe"
+	"github.com/tuneinsight/lattigo/v6/schemes/bgv"
+)
+
+/********* МОДЕЛИ *************************************************/
+
+// CTIRecordMini для channel_mini: компактные записи.
+type CTIRecordMini struct {
+	MD5           string `json:"md5"`
+	MalwareFamily string `json:"malware_family"`
+	ThreatLevel   string `json:"threat_level"`
+	Padding       string `json:"padding,omitempty"` // Добавлено для регулировки размера
+}
+
+// CTIRecordMid для channel_mid: баланс между детализацией и размером.
+type CTIRecordMid struct {
+	MD5           string `json:"md5"`
+	SHA256Short   string `json:"sha256_short"`
+	MalwareClass  string `json:"malware_class"`
+	MalwareFamily string `json:"malware_family"`
+	AVDetects     int    `json:"av_detects"`
+	ThreatLevel   string `json:"threat_level"`
+	Padding       string `json:"padding,omitempty"` // Добавлено для регулировки размера
+}
+
+// CTIRecordRich для channel_rich: полные записи со всеми хешами.
+type CTIRecordRich struct {
+	MD5           string `json:"md5"`
+	SHA256        string `json:"sha256"`
+	MalwareClass  string `json:"malware_class"`
+	MalwareFamily string `json:"malware_family"`
+	AVDetects     int    `json:"av_detects"`
+	ThreatLevel   string `json:"threat_level"`
+	Padding       string `json:"padding,omitempty"` // Добавлено для регулировки размера
+}
+
+type request struct {
+	Method string   `json:"method"`
+	Args   []string `json:"args"`
+}
+type response struct {
+	Response string `json:"response,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+/********* ГЛОБАЛЬНОЕ «СОСТОЯНИЕ БЛОКЧЕЙНА» ***********************/
+var (
+	mtx         sync.RWMutex
+	params      bgv.Parameters
+	ptdb        *rlwe.Plaintext
+	records     [][]byte
+	slotsPerRec int
+)
+
+/********* ИНИЦИАЛИЗАЦИЯ HE PARAMS *****************************************/
+func createParams(logN int) (bgv.Parameters, error) {
+	if logN < 13 || logN > 18 {
+		return bgv.Parameters{}, fmt.Errorf("LogN must be between 13 and 18")
+	}
+	paramsLit := bgv.ParametersLiteral{
+		LogN:             logN,
+		LogQ:             []int{54},
+		LogP:             []int{54},
+		PlaintextModulus: 65537,
+	}
+	return bgv.NewParametersFromLiteral(paramsLit)
+}
+
+/********* ХЭНДЛЕР INVOKE ******************************************/
+func invoke(w http.ResponseWriter, r *http.Request) {
+	var req request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	switch req.Method {
+	case "InitLedger":
+		if len(req.Args) != 3 {
+			writeErr(w, fmt.Errorf("InitLedger requires exactly 3 arguments: numRecords, maxJsonLength, channel"))
+			return
+		}
+
+		n, err1 := strconv.Atoi(req.Args[0])
+		maxJsonLength, err2 := strconv.Atoi(req.Args[1])
+		channel := req.Args[2]
+
+		if err1 != nil || err2 != nil || n <= 0 || maxJsonLength <= 0 {
+			writeErr(w, fmt.Errorf("numRecords and maxJsonLength must be positive integers"))
+			return
+		}
+		if channel == "" {
+			writeErr(w, fmt.Errorf("channel cannot be empty"))
+			return
+		}
+
+		// Определяем logN на основе канала
+		logN := map[string]int{
+			"channel_mini": 13,
+			"channel_mid":  14,
+			"channel_rich": 15,
+		}[channel]
+		if logN == 0 {
+			writeErr(w, fmt.Errorf("invalid channel: %s", channel))
+			return
+		}
+
+		err := initLedger(n, maxJsonLength, channel, logN)
+		if err != nil {
+			log.Printf("[ERROR] Failed to init ledger from invoke: %v", err)
+			writeErr(w, err)
+			return
+		}
+		writeOK(w, fmt.Sprintf("ledger initialised with %d records for '%s' (LogN=%d) using slotsPerRec=%d", n, channel, logN, slotsPerRec))
+
+	case "GetSlotsPerRecord":
+		writeOK(w, fmt.Sprintf("%d", slotsPerRec))
+
+	case "PublicQueryCTI":
+		if len(req.Args) != 1 {
+			writeErr(w, fmt.Errorf("arg 0 = key (e.g., record000)"))
+			return
+		}
+		key := req.Args[0]
+		idx, err := strconv.Atoi(key[len(key)-3:])
+		if err != nil || idx < 0 {
+			writeErr(w, fmt.Errorf("invalid record index from key %s", key))
+			return
+		}
+
+		mtx.RLock()
+		defer mtx.RUnlock()
+		if idx >= len(records) {
+			writeErr(w, fmt.Errorf("not found"))
+			return
+		}
+		writeOK(w, string(records[idx]))
+
+	case "PublicQueryALL":
+		mtx.RLock()
+		defer mtx.RUnlock()
+		writeOK(w, fmt.Sprintf("%d", len(records)))
+
+	case "PIRQuery":
+		if len(req.Args) != 1 {
+			writeErr(w, fmt.Errorf("need encQueryB64"))
+			return
+		}
+		outB64, err := pirQuery(req.Args[0])
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeOK(w, outB64)
+
+	default:
+		writeErr(w, fmt.Errorf("unknown method"))
+	}
+}
+
+/********* БИЗНЕС-ЛОГИКА ******************************************/
+func initLedger(n int, maxJsonLength int, channel string, logN int) error {
+	mtx.Lock()
+	defer mtx.Unlock()
+
+	p, err := createParams(logN)
+	if err != nil {
+		return err
+	}
+	params = p
+	log.Printf("[INFO] Initializing ledger with LogN=%d (Ring size = %d)", logN, params.MaxSlots())
+
+	genRecords, err := generateRecords(n, channel, maxJsonLength)
+	if err != nil {
+		return err
+	}
+	records = genRecords
+
+	calcSlotsPerRec()
+
+	requiredSlots := len(records) * slotsPerRec
+	availableSlots := params.MaxSlots()
+	log.Printf("[DEBUG] Ring size check: Required slots = %d (%d records * %d slots/rec), Available slots = %d",
+		requiredSlots, len(records), slotsPerRec, availableSlots)
+
+	if requiredSlots > availableSlots {
+		err := fmt.Errorf("DB too big for chosen ring. Required slots: %d, available: %d", requiredSlots, availableSlots)
+		log.Printf("[ERROR] %v", err)
+		return err
+	}
+
+	enc := bgv.NewEncoder(params)
+	packed := make([]uint64, params.MaxSlots())
+
+	for recIdx, recBytes := range records {
+		for i := 0; i < len(recBytes) && i < slotsPerRec; i++ {
+			packed[recIdx*slotsPerRec+i] = uint64(recBytes[i])
+		}
+	}
+	pt := bgv.NewPlaintext(params, params.MaxLevel())
+	if err := enc.Encode(packed, pt); err != nil {
+		return fmt.Errorf("failed to encode database: %w", err)
+	}
+	ptdb = pt
+	log.Println("[INFO] PTDB ready (encoded)")
+	debugPrintRecords(ptdb)
+	return nil
+}
+
+func pirQuery(encQueryB64 string) (string, error) {
+	mtx.RLock()
+	defer mtx.RUnlock()
+
+	if ptdb == nil {
+		return "", fmt.Errorf("PIR database not initialized")
+	}
+
+	encBytes, err := base64.StdEncoding.DecodeString(encQueryB64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode base64 query: %w", err)
+	}
+
+	ctQuery := rlwe.NewCiphertext(params, 1, params.MaxLevel())
+	if err := ctQuery.UnmarshalBinary(encBytes); err != nil {
+		return "", fmt.Errorf("failed to unmarshal query ciphertext: %w", err)
+	}
+
+	eval := bgv.NewEvaluator(params, nil)
+	ctRes, err := eval.MulNew(ctQuery, ptdb)
+	if err != nil {
+		return "", fmt.Errorf("PIR evaluation failed: %w", err)
+	}
+
+	outBytes, err := ctRes.MarshalBinary()
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal result ciphertext: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(outBytes), nil
+}
+
+/********* ГЕНЕРАЦИЯ ЗАПИСЕЙ *************************************************/
+var malwareClasses = []string{"Trojan", "Worm", "Ransomware", "Backdoor", "Spyware"}
+var malwareFamilies = []string{"Emotet", "WannaCry", "Ryuk", "AgentTesla", "Pegasus"}
+var threatLevels = []string{"Low", "Medium", "High", "Critical"}
+
+func fakeHash(prefix string, i int, length int) string {
+	if length <= 0 {
+		return ""
+	}
+	base := prefix + strconv.Itoa(i)
+	hash := sha256.Sum256([]byte(base))
+	hexStr := hex.EncodeToString(hash[:])
+
+	for len(hexStr) < length {
+		base += "x"
+		h := sha256.Sum256([]byte(base))
+		hexStr += hex.EncodeToString(h[:])
+	}
+	return hexStr[:length]
+}
+
+func generateRecords(n int, channel string, maxJsonLength int) ([][]byte, error) {
+	// Проверяем допустимые значения maxJsonLength
+	validLengths := []int{64, 128, 224, 256, 384, 512}
+	valid := false
+	for _, l := range validLengths {
+		if maxJsonLength == l {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return nil, fmt.Errorf("maxJsonLength %d is not in allowed set: %v", maxJsonLength, validLengths)
+	}
+
+	// Определяем максимальное количество записей на основе матрицы
+	logN := map[string]int{
+		"channel_mini": 13,
+		"channel_mid":  14,
+		"channel_rich": 15,
+	}[channel]
+	if logN == 0 {
+		return nil, fmt.Errorf("unknown channel: %s", channel)
+	}
+	ringSize := 1 << logN
+	maxDBSize := ringSize / ((maxJsonLength + 7) / 8)
+
+	if n > maxDBSize {
+		log.Printf("[WARN] Requested %d records exceed MaxDBSize %d for channel %s and maxJsonLength %d. Adjusting to %d.", n, maxDBSize, channel, maxJsonLength, maxDBSize)
+		n = maxDBSize
+	}
+
+	records := make([][]byte, n)
+	log.Printf("[INFO] Generating %d records for '%s' with target max JSON length: %d bytes", n, channel, maxJsonLength)
+
+	for i := 0; i < n; i++ {
+		var recBytes []byte
+		var err error
+		switch channel {
+		case "channel_mini":
+			recBytes, err = generateMiniRecord(i, maxJsonLength)
+		case "channel_mid":
+			recBytes, err = generateMidRecord(i, maxJsonLength)
+		case "channel_rich":
+			recBytes, err = generateRichRecord(i, maxJsonLength)
+		default:
+			return nil, fmt.Errorf("unknown channel: %s", channel)
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate record %d: %w", i, err)
+		}
+		if len(recBytes) > maxJsonLength {
+			log.Printf("[WARN] Record %d for channel '%s' exceeded max length. Got: %d, Max: %d", i, channel, len(recBytes), maxJsonLength)
+		} else if len(recBytes) < maxJsonLength-8 {
+			log.Printf("[WARN] Record %d for channel '%s' is too small. Got: %d, Max: %d", i, channel, len(recBytes), maxJsonLength)
+		}
+		records[i] = recBytes
+	}
+
+	return records, nil
+}
+
+func generateRichRecord(i int, maxJsonLength int) ([]byte, error) {
+	baseRec := CTIRecordRich{
+		MalwareClass:  malwareClasses[i%len(malwareClasses)],
+		MalwareFamily: malwareFamilies[i%len(malwareFamilies)],
+		AVDetects:     (i % 50) + 1,
+		ThreatLevel:   threatLevels[i%len(threatLevels)],
+	}
+	baseBytes, _ := json.Marshal(baseRec)
+	baseSize := len(baseBytes)
+	remaining := maxJsonLength - baseSize - 32 - 64 - 15 // Учитываем MD5 (32), SHA256 (64) и ~15 байт для поля padding в JSON
+
+	if remaining < 0 {
+		return nil, fmt.Errorf("maxJsonLength %d is too small for a rich record (base size %d + hashes)", maxJsonLength, baseSize)
+	}
+
+	md5Len := 32 // Фиксируем длину MD5
+	shaLen := 64 // Фиксируем длину SHA256
+
+	finalRec := CTIRecordRich{
+		MD5:           fakeHash("md5", i, md5Len),
+		SHA256:        fakeHash("sha", i, shaLen),
+		MalwareClass:  baseRec.MalwareClass,
+		MalwareFamily: baseRec.MalwareFamily,
+		AVDetects:     baseRec.AVDetects,
+		ThreatLevel:   baseRec.ThreatLevel,
+		Padding:       fakeHash("pad", i, remaining),
+	}
+	recBytes, err := json.Marshal(finalRec)
+	if err != nil {
+		return nil, err
+	}
+	return recBytes, nil
+}
+
+func generateMidRecord(i int, maxJsonLength int) ([]byte, error) {
+	baseRec := CTIRecordMid{
+		MalwareClass:  malwareClasses[i%len(malwareClasses)],
+		MalwareFamily: malwareFamilies[i%len(malwareFamilies)],
+		AVDetects:     (i % 50) + 1,
+		ThreatLevel:   threatLevels[i%len(threatLevels)],
+	}
+	baseBytes, _ := json.Marshal(baseRec)
+	baseSize := len(baseBytes)
+	remaining := maxJsonLength - baseSize - 32 - 16 - 15 // Учитываем MD5 (32), SHA256Short (16) и ~15 байт для поля padding
+
+	if remaining < 0 {
+		return nil, fmt.Errorf("maxJsonLength %d is too small for a mid record (base size %d + hashes)", maxJsonLength, baseSize)
+	}
+
+	md5Len := 32
+	shaShortLen := 16
+
+	finalRec := CTIRecordMid{
+		MD5:           fakeHash("md5", i, md5Len),
+		SHA256Short:   fakeHash("sha_short", i, shaShortLen),
+		MalwareClass:  baseRec.MalwareClass,
+		MalwareFamily: baseRec.MalwareFamily,
+		AVDetects:     baseRec.AVDetects,
+		ThreatLevel:   baseRec.ThreatLevel,
+		Padding:       fakeHash("pad", i, remaining),
+	}
+	recBytes, err := json.Marshal(finalRec)
+	if err != nil {
+		return nil, err
+	}
+	return recBytes, nil
+}
+
+func generateMiniRecord(i int, maxJsonLength int) ([]byte, error) {
+	baseRec := CTIRecordMini{
+		MalwareFamily: malwareFamilies[i%len(malwareFamilies)],
+		ThreatLevel:   threatLevels[i%len(threatLevels)],
+	}
+	baseBytes, _ := json.Marshal(baseRec)
+	baseSize := len(baseBytes)
+	remaining := maxJsonLength - baseSize - 32 - 15 // Учитываем MD5 (32) и ~15 байт для поля padding
+
+	if remaining < 0 {
+		return nil, fmt.Errorf("maxJsonLength %d is too small for a mini record (base size %d + md5)", maxJsonLength, baseSize)
+	}
+
+	md5Len := 32
+
+	finalRec := CTIRecordMini{
+		MD5:           fakeHash("md5", i, md5Len),
+		MalwareFamily: baseRec.MalwareFamily,
+		ThreatLevel:   baseRec.ThreatLevel,
+		Padding:       fakeHash("pad", i, remaining),
+	}
+	recBytes, err := json.Marshal(finalRec)
+	if err != nil {
+		return nil, err
+	}
+	return recBytes, nil
+}
+
+/********* UTILS *************************************************/
+func calcSlotsPerRec() {
+	max := 0
+	for _, recBytes := range records {
+		if len(recBytes) > max {
+			max = len(recBytes)
+		}
+	}
+	slotsPerRec = ((max + 7) / 8) * 8
+	if slotsPerRec == 0 {
+		slotsPerRec = 8
+	}
+
+	log.Printf("[DEBUG] Max actual JSON len = %d bytes", max)
+	log.Printf("[DEBUG] slotsPerRec calculated = %d  ( = %d × 8-byte blocks)",
+		slotsPerRec, slotsPerRec/8)
+}
+
+func debugPrintRecords(pt *rlwe.Plaintext) {
+	if pt == nil {
+		return
+	}
+	enc := bgv.NewEncoder(params)
+	vec := make([]uint64, params.MaxSlots())
+	if err := enc.Decode(pt, vec); err != nil {
+		log.Println("[ERROR] decode error in debugPrintRecords:", err)
+		return
+	}
+
+	log.Println("--- BEGIN DEBUG DB CONTENT ---")
+	for recIdx := 0; recIdx < len(records); recIdx++ {
+		start := recIdx * slotsPerRec
+		end := start + slotsPerRec
+		var buf []byte
+		for _, v := range vec[start:end] {
+			if v == 0 {
+				break
+			}
+			buf = append(buf, byte(v))
+		}
+		log.Printf("[DEBUG rec %03d] %s", recIdx, string(buf))
+	}
+	log.Println("--- END DEBUG DB CONTENT ---")
+}
+
+func writeOK(w http.ResponseWriter, resp string) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response{Response: resp})
+}
+func writeErr(w http.ResponseWriter, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(response{Error: err.Error()})
+}
+
+/********* MAIN ***************************************************/
+func main() {
+	http.HandleFunc("/invoke", invoke)
+	log.Println("REST chaincode listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
