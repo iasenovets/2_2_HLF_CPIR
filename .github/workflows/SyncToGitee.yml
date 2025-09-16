@@ -1,0 +1,34 @@
+name: Sync Github Repos To Gitee
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    name: Github sync to Gitee
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Mirror current repo to Gitee via SSH
+        uses: Yikun/hub-mirror-action@v1.5
+        with:
+          # Source and destination accounts
+          src: github/artias13
+          dst: gitee/artias
+          account_type: user
+
+          # Use SSH to avoid HTTPS credential prompts
+          clone_style: ssh
+          dst_key:  ${{ secrets.GITEE_PRIVATE_KEY }}   # private key (pub part must be added to BOTH GitHub & Gitee)
+          dst_token: ${{ secrets.GITEE_TOKEN }}         # for creating repos on Gitee if missing
+
+          # Mirror only THIS repository
+          static_list: ${{ github.event.repository.name }}
+
+          # Extras
+          force_update: true
+          debug: true
+          timeout: '600s'
