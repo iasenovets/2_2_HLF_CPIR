@@ -196,35 +196,41 @@ Our design is guided by the following goals:
 \end{itemize}
 
 \begin{table}[!t]
-    \caption{Notation}
-    \label{tab:notation}
-    \centering
-    \renewcommand{\arraystretch}{1.1}
-    \begin{tabular}{l l}
+\caption{Notation}
+\label{tab:notation}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.1}
+    \begin{tabular}{|p{78pt}|p{170pt}|}
     \hline
-    Symbol & Description \\
+    \textbf{Symbol} & \textbf{Description} \\
     \hline
     $\lambda$ & Security parameter \\
     $n$ & Database size; index domain $[n]=\{0,\dots,n-1\}$ \\
     $D=\{d_0,\dots,d_{n-1}\}$ & Database records (serialized bytes/words) \\
     $m_{\mathrm{DB}}$ & Plaintext polynomial representation of $D$ (BGV batching) \\
     $v_i$ & One-hot selection vector for index $i$ \\
-    $pk, sk$ & Public / secret keys (BGV) \\
+    $pk,\, sk$ & Public / secret keys (BGV) \\
     $ct_q=\mathsf{Enc}_{pk}(v_i)$ & Encrypted query (ciphertext) \\
     $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response; $ct_r=\mathsf{Enc}_{pk}(d_i)$ \\
-    $d_i = \text{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
+    $d_i=\mathsf{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
     $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$ & Key generation \\
     $\mathsf{Enc}_{pk}(\cdot)$, $\mathsf{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
-    $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (here: ct–pt multiply) \\
-    $N,q,t$ & BGV ring degree and moduli (ciphertext $q$, plaintext $t$) \\
-    $|\cdot|,\ \mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
-    $\mathcal{C}$, $\mathcal{E}$, $\mathcal{O}$, $\mathcal{P}$ & Client; endorsing peers; orderer; committing peers \\
-    $\textsf{evaluate}$, $\textsf{submit}$ & Fabric read / write transaction phases \\
-    %$\textsf{InitLedger}$, $\textsf{GetMetadata}$, $\textsf{PIRQuery}$ & Chaincode entry points \\
+    $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (ct–pt multiply) \\
+    $N$ & Ring dimension ($N=2^{\log N}$) \\
+    $q,\, t$ & Ciphertext modulus $q$ and plaintext modulus $t$ (BGV) \\
+    $record_s$ & Slots allocated per record (slot window size) \\
+    $record_b$ & Base serialized size of a record in bytes \\
+    $record_{\mu,\log N}$ & Template-specific minimum record size at security level $\log N$ \\
+    $\mathcal{S}$ & Allowed discrete slot sizes (implementation policy) \\
+    $\mathbf{c}=(c_0,\dots,c_{N-1})$ & Coefficient vector of the polynomial encoding (slots of $m_{\mathrm{DB}}$) \\
+    $|\cdot|$, $\mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
+    $\mathcal{C},\,\mathcal{E},\,\mathcal{O},\,\mathcal{P}$ & Client; endorsing peers; orderer; committing peers \\
+    \textsf{evaluate}, \textsf{submit} & Fabric read / write transaction phases \\
     $\mathcal{L}$ & Leakage considered (ciphertext size, timing; defined later) \\
     \hline
     \end{tabular}
 \end{table}
+
 
 \subsection{Cryptographic Primitives}
 
@@ -359,35 +365,36 @@ In our motivating use case of Cyber Threat Intelligence (CTI) sharing, JSON obje
 Every character is represented by its ASCII code in $[0,255]$. 
 This ensures that arbitrary structured records can be embedded in the polynomial without loss of information.
 
-\paragraph{Step 2: Calculate Window Size.} 
-We compute the slot allocation per record as
+\paragraph{Step 2: Calculate Slot Window.} 
+We determine the slot allocation per record as
 \[
-\textit{slotsPerRecord} = \left\lceil \frac{\textit{maxLen}}{\textit{bytesPerSlot}} \right\rceil,
+record_s = \left\lceil \frac{record_b}{\textit{bytesPerSlot}} \right\rceil,
 \]
-where \textit{maxLen} is the maximum observed record length. 
-For example, if the largest record is 126 bytes and each slot holds one byte, then each record is allocated 128 slots. 
+where $record_b$ is the maximum serialized record length observed in bytes.  
+In our prototype, each slot stores exactly one byte.  
+For example, if the largest record is $126$ bytes, then $record_s = \lceil 126/1 \rceil = 126$, which rounds up to $128$ slots due to the discrete window policy.  
 This guarantees uniform slot windows across all records, simplifying query construction at the cost of potential padding overhead.
-
-\paragraph{Step 3: Pack into Coefficient Vector.} 
-Serialized byte arrays are inserted into disjoint slot windows within a coefficient vector 
-$d = (d_0, d_1, \dots, d_{N-1})$, 
-where $N=2^{\log N}$ is the ring capacity of the BGV scheme. 
-Padding zeros are added if a record is shorter than the fixed window. 
-Thus each record $d_i$ maps to a contiguous slot interval that can be selectively retrieved via a PIR query.
 
 \begin{figure*}[!ht]
     \centering
     \includegraphics[width=3.3in]{figures/diagrams/2_polynomial_construction.png}
     \caption{PTDB construction from JSON to plaintext polynomial. 
-    Each record is serialized to bytes, mapped into a fixed slot window, and packed into a coefficient vector $d$. 
+    Each record is serialized to bytes, mapped into a fixed slot window $record_s$, and packed into a coefficient vector $d$. 
     The vector is then encoded as a BGV plaintext polynomial $m_{\mathrm{DB}}$, which is stored in the Fabric world state.}
     \label{fig:polynomial-construction}
 \end{figure*}
 
+\paragraph{Step 3: Pack into Coefficient Vector.} 
+Serialized byte arrays are inserted into disjoint slot windows of length $record_s$ within a coefficient vector 
+$c = (c_0, c_1, \dots, c_{N-1})$,  
+where $N = 2^{\log N}$ is the ring capacity of the BGV scheme. 
+Padding zeros are added if a record is shorter than $record_s$.  
+Thus each record $d_i$ occupies a contiguous slot interval that can be privately retrieved through PIR.
+
 \paragraph{Step 4: Encode into Polynomial.} 
 Finally, the coefficient vector $d$ is encoded into a plaintext polynomial
 \[
-m_{\mathrm{DB}}(X) = \sum_{j=0}^{N-1} d_j X^j \in R_t,
+m_{\mathrm{DB}}(X) = \sum_{j=0}^{N-1} c_j X^j \in R_t,
 \]
 where $R_t = \mathbb{Z}_t[X]/(X^N+1)$. 
 This polynomial serves as the plaintext database representation stored in the Fabric world state. 
@@ -397,47 +404,90 @@ Endorsing peers operate over $m_{\mathrm{DB}}$ during PIR queries, while clients
 While fixed-width packing introduces some wasted slots, it guarantees consistent indexing and enables record-level PIR retrieval. 
 Selective field-level retrieval would require adaptive packing with variable slot windows, which we leave as future work.
 
-
-
 \subsection{Packing Constraints}
 
-Our experiments revealed two principal constraints that govern which parameter configurations are feasible when embedding ledger records into the polynomial $m_{\mathrm{DB}}$. 
-These constraints restrict the joint choice of ring dimension $N=2^{\log N}$, number of records $n$, and slot allocation per record.
+Embedding records into the plaintext polynomial $m_{\mathrm{DB}}$ is feasible only for parameter triples 
+$(\log N, n, record_s)$ that satisfy \emph{all} of the following constraints. 
+These constraints form a hierarchical relationship: template requirements dominate discrete allocation, 
+and both are ultimately bounded by ring capacity.
 
-\paragraph{Constraint 1: Ring capacity.} 
-The first limitation arises from the size of the ciphertext ring, which determines the total number of available slots. 
-Formally,
+\paragraph{Constraint 1: Ring capacity (global upper bound).}
+The total number of occupied slots cannot exceed the ring size:
 \[
-n \cdot \textit{slotsPerRecord} \leq N.
+n \cdot record_s \ \leq \ N.
 \]
-Any configuration violating this condition exceeds the polynomial capacity and must be rejected. 
-For example, with $\log N = 13$ (so $N=8192$ slots) and $\textit{slotsPerRecord}=224$, the system can pack at most $\lfloor 8192/224 \rfloor = 36$ records.
+This represents the fundamental mathematical limit imposed by the cryptographic parameters. 
+For example, with $\log N = 13$ ($N = 8192$) and $record_s = 224$, 
+at most $\lfloor 8192/224 \rfloor = 36$ records can be packed.
 
-\paragraph{Constraint 2: Record size.} 
-The second limitation is dictated by the serialization of structured records into bytes. 
-In our motivating CTI use case, each record contains fields such as cryptographic hashes (MD5, SHA-256), malware classification, detection counts, and severity labels. 
-When serialized into JSON and converted to bytes, this yields a base size of approximately $113$–$125$ bytes, depending on field content. 
-Thus, each record must be allocated at least $\textit{baseSize}$ slots to fit completely. 
-Formally,
+\paragraph{Constraint 2: Record structure requirements (template-specific minima).}
+Each security level ($\log N$) corresponds to a record template with mandatory fields 
+that impose a minimum slot requirement $record_{\mu,\log N}$. Examples include:
+\begin{itemize}
+    \item \textbf{Mini records} ($\log N = 13$): MD5 hash + malware family + threat level $\;\;\Rightarrow\;\; record_{\mu,13} \approx 128$ bytes.
+    \item \textbf{Mid records} ($\log N = 14$): MD5 + SHA-256 short + malware class + AV detects $\;\;\Rightarrow\;\; record_{\mu,14} \approx 224$ bytes.
+    \item \textbf{Rich records} ($\log N = 15$): MD5 + full SHA-256 + all metadata $\;\;\Rightarrow\;\; record_{\mu,15} \approx 256$ bytes.
+\end{itemize}
+
+These minima arise from generator checks of the form
 \[
-\textit{slotsPerRecord} \geq \textit{baseSize}.
+\begin{aligned}
+    \textsf{Mini:}\quad & record_s \ \geq \ record_b + 32 + 15, \\
+    \textsf{Mid:}\quad  & record_s \ \geq \ record_b + 32 + 16 + 15, \\
+    \textsf{Rich:}\quad & record_s \ \geq \ record_b + 32 + 64 + 15,
+\end{aligned}
 \]
-Otherwise, records would be truncated and decryption would fail. 
-As an example, although $\log N=13$ ($N=8192$ slots) theoretically allows $n=128$ records with $\textit{slotsPerRecord}=64$, this configuration is infeasible because the base record size ($\approx 113$ bytes) exceeds the available slot budget.
+where $record_b \approx 113$--125 bytes denotes the base JSON structure 
+and numeric terms represent mandatory hash fields and serialization overhead.
 
-\noindent Only configurations satisfying both constraints are feasible. 
-Figure~\ref{fig:exp-matrix} plots the feasible parameter space across different $\log N$ values, showing how record size and ring capacity jointly restrict the maximum database size. 
+\paragraph{Constraint 3: Discrete allocation policy.}
+Operationally, we restrict the slot window $record_s$ to a discrete set for implementation simplicity:
+\[
+\mathcal{S} = \{64, 128, 224, 256, 384, 512\} \ \text{bytes}.
+\]
+This means that even if Constraints~1 and~2 are satisfied, 
+the configuration is rejected unless $record_s \in \mathcal{S}$.
+
+\paragraph{Constraint hierarchy and feasibility condition.}
+We capture feasibility using three predicates:
+\begin{align*}
+\mathsf{Cap}(N,s,n) &: n \cdot s \leq N \quad \text{(ring capacity)} \\
+\mathsf{Min}(\log N,s) &: s \geq \mu_{\log N} \quad \text{(template minimum)} \\
+\mathsf{Disc}(s) &: s \in \mathcal{S} \quad \text{(discrete allocation)}
+\end{align*}
+where $s = \mathit{slotsPerRecord}$. A configuration is feasible iff $\mathsf{Cap} \land \mathsf{Min} \land \mathsf{Disc}$.
+
+\paragraph{Examples of constraint interaction.}
+\begin{itemize}
+    \item \textbf{$\log N=13$, Mini template:} Requires $record_s \geq record_{\mu,13} \approx 128$. 
+    The smallest viable window is $128$ (since $64$ is insufficient). 
+    Capacity yields $n \leq \lfloor 8192/128 \rfloor = 64$.
+
+    \item \textbf{$\log N=14$, Mid template:} Requires $record_s \geq record_{\mu,14} \approx 224$. 
+    Viable windows are $224$, $256$, etc. 
+    With $N = 16384$, $n \leq \lfloor 16384/224 \rfloor = 73$.
+
+    \item \textbf{$\log N=15$, Rich template:} Requires $record_s \geq record_{\mu,15} \approx 256$. 
+    Windows $64$, $128$, $224$ are invalid. 
+    With $N = 32768$, $n \leq \lfloor 32768/256 \rfloor = 128$.
+\end{itemize}
 
 \begin{figure}[!t]
     \centering
-    \includegraphics[width=3.4in]{figures/diagrams/exp_matrix.png}
-    \caption{Feasible configurations in the experimental matrix. 
-    Each point corresponds to a $(\log N, \textit{slotsPerRecord}, n)$ tuple that satisfies both ring capacity and record size constraints. 
-    Configurations violating either constraint are rejected.}
+    \includegraphics[width=3.4in]{figures/diagrams/iasen3.png}
+    \caption{Feasible configurations under all constraints. 
+    Dashed curves: ring capacity for $\log N \in \{13,14,15\}$. 
+    Vertical lines: template-driven minima $record_{\mu,\log N}$ (Constraint~2). 
+    Discrete windows (Constraint~3) align with x-axis ticks. 
+    Circles mark feasible $(\log N,record_s,n)$ triples.}
     \label{fig:exp-matrix}
 \end{figure}
 
-
+\paragraph{Design implications.}
+This constraint system creates a natural trade-off: higher security levels ($\log N$) 
+support larger databases but require more feature-rich record structures. 
+The discrete allocation policy simplifies implementation while ensuring predictable performance. 
+The experimental matrix reveals that viable configurations cluster where template requirements align with cryptographic capacity, guiding practical parameter selection.
 
 
 \section{CONCLUSION}
