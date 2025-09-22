@@ -1,4 +1,4 @@
-module off-chain-cpir
+module off-chain-pir-client
 
 go 1.24.1
 

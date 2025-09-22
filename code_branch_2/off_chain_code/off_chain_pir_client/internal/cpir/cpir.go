@@ -27,9 +27,9 @@ var Debug = true
 //     but must be non-empty if you later add relinearisation)
 //   - PlaintextModulus: an NTT-friendly prime (T ≡ 1 mod 2·N)
 //     65537 is the textbook choice.
-func ParamsLiteral128() bgv.ParametersLiteral {
+func ParamsLiteral128(logN int) bgv.ParametersLiteral {
 	lit := bgv.ParametersLiteral{
-		LogN:             13,        // 2^13 = 8192
+		LogN:             logN,      // 2^13 = 8192
 		LogQ:             []int{54}, // one 54-bit ciphertext prime (picked automatically)
 		LogP:             []int{54}, // one 54-bit special prime for keyswitch (future-proof)
 		PlaintextModulus: 65537,     // T
@@ -42,8 +42,8 @@ func ParamsLiteral128() bgv.ParametersLiteral {
 }
 
 // GenKeys produces a fresh BGV keypair and returns (params, sk, pk).
-func GenKeys() (bgv.Parameters, *rlwe.SecretKey, *rlwe.PublicKey, error) {
-	params, err := bgv.NewParametersFromLiteral(ParamsLiteral128())
+func GenKeys(logN int) (bgv.Parameters, *rlwe.SecretKey, *rlwe.PublicKey, error) {
+	params, err := bgv.NewParametersFromLiteral(ParamsLiteral128(logN))
 	if err != nil {
 		return params, nil, nil, err
 	}

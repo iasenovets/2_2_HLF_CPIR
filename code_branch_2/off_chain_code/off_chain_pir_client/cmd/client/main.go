@@ -4,20 +4,21 @@ import (
 	"fmt"
 	"strconv"
 
-	"off-chain-cpir/internal/cpir"
-	"off-chain-cpir/internal/utils"
+	"off-chain-pir-client/internal/cpir"
+	"off-chain-pir-client/internal/utils"
 )
 
 /********* main demo **********************************************/
 func main() {
 	//const dbSize = 100
 	const idx = 13
+	const logN = 13 // available values: 13..15
 
 	// HE keys
-	params, sk, pk, _ := cpir.GenKeys()
+	params, sk, pk, _ := cpir.GenKeys(logN)
 
 	// --- Init --- numRecords | maxJSONlength | channel_name
-	utils.Call("InitLedger", "73", "128", "channel_mid")
+	utils.Call("InitLedger", "256", "64", fmt.Sprintf("%d", logN))
 
 	slotsStr, _ := utils.Call("GetSlotsPerRecord")
 	slotsPerRec, _ := strconv.Atoi(slotsStr)

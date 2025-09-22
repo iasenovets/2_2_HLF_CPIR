@@ -1,4 +1,4 @@
-module pir_rest_server_ms
+module off-chain-pir-server
 
 go 1.24.1
 
