@@ -1,0 +1,505 @@
+\documentclass{ieeetj}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx,color}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{hyperref}
+%\hypersetup{hidelinks=true}
+\usepackage{algorithm,algorithmic}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\AtBeginDocument{\definecolor{tmlcncolor}{cmyk}{0.93,0.59,0.15,0.02}\definecolor{NavyBlue}{RGB}{0,86,125}}
+
+
+
+
+\def\OJlogo{\vspace{-4pt}$<$Society logo(s) and publication title will appear here.$>$}
+\def\seclogo{\vspace{10pt}$<$Society logo(s) and publication title will appear here.$>$}
+
+\def\authorrefmark#1{\ensuremath{^{\textbf{#1}}}}
+
+\begin{document}
+\receiveddate{XX Month, XXXX}
+\reviseddate{XX Month, XXXX}
+\accepteddate{XX Month, XXXX}
+\publisheddate{XX Month, XXXX}
+\currentdate{XX Month, XXXX}
+\doiinfo{XXXX.2022.1234567}
+
+\markboth{}{Author {et al.}}
+
+\title{Blind Chaincode: Enabling Computational Private Information Retrieval for Query Privacy in Hyperledger Fabric}
+
+
+\author{First A. Author\authorrefmark{1}, Fellow, IEEE, Second B. Author\authorrefmark{2},\\ and Third C. Author Jr.\authorrefmark{3}, Member, IEEE}
+\affil{National Institute of Standards and Technology, Boulder, CO 80305 USA}
+\affil{Department of Physics, Colorado State University, Fort Collins, CO 80523 USA}
+\affil{Electrical Engineering Department, University of Colorado, Boulder, CO 80309 USA}
+\corresp{Corresponding author: First A. Author (email: author@ boulder.nist.gov).}
+\authornote{This paragraph of the first footnote will contain support information, including sponsor and financial support acknowledgment. For example, ``This work was supported in part by the U.S. Department of Commerce under Grant 123456.''}
+
+
+\begin{abstract}
+    Permissioned blockchains ensure integrity and auditability of shared data but expose query parameters to endorsing peers during read operations. 
+    In Hyperledger Fabric, evaluate calls are executed by peers who observe function arguments and read-sets, creating privacy risks for organizations querying sensitive records. 
+    We address this gap by presenting the first practical integration of Computational Private Information Retrieval (CPIR) into Fabric chaincode. 
+    Our design encodes the ledger’s key–value table as a plaintext polynomial and allows clients to submit encrypted selection vectors, evaluated under the Brakerski--Gentry--Vaikuntanathan (BGV) homomorphic encryption scheme. 
+    Peers return only encrypted responses, preventing index leakage while preserving normal Fabric endorsement and audit flows. 
+    We prototype the system with the Lattigo library and benchmark client-side encryption/decryption, peer-side evaluation, ciphertext size, and end-to-end query latency. 
+    Results show that single-query latencies remain practical for typical Fabric deployments, while eliminating the privacy leakage of baseline \texttt{GetState} operations. 
+    This work demonstrates the feasibility of embedding CPIR directly into permissioned blockchains and provides a foundation for future enhancements such as post-quantum schemes, zero-knowledge proofs, and sublinear retrieval.
+\end{abstract}
+    
+
+\begin{IEEEkeywords}
+    Private Information Retrieval (PIR), Homomorphic Encryption, Hyperledger Fabric, Permissioned Blockchains, Query Privacy.
+\end{IEEEkeywords}
+    
+    
+
+%\IEEEspecialpapernotice{(Invited Paper)}
+
+\maketitle
+
+\section{INTRODUCTION}\label{sec:introduction}
+
+\subsection{MOTIVATION AND CONTRIBUTION}
+
+Permissioned blockchains such as Hyperledger Fabric are widely adopted for tamper-evident and auditable data management across consortiums. 
+Their guarantees, however, primarily cover writes. 
+In Fabric, the separation of \emph{evaluate} and \emph{submit} makes the read-privacy gap explicit: an evaluate call is a read-only proposal sent to endorsing peers, which execute the chaincode and return results without committing to the ledger. 
+Crucially, these peers still observe all function arguments and read-sets. 
+Thus, in multi-organization settings, the dominant privacy risk arises not from the immutable ledger, but from endorsing peers who can log or infer sensitive query information.
+
+Private Information Retrieval (PIR)~\cite{ref16_Chor1998Private} addresses this challenge by enabling a client to retrieve an item from a database without revealing which item was requested. 
+For a database $D = \{d_0,\dots,d_{n-1}\}$, the client forms a one-hot selection vector $v_i$ with a single ``1'' at index $i$. 
+By encrypting $v_i$ into $c_q = \text{Enc}_{pk}(v_i)$ and sending it to the server, the server computes an encrypted response 
+$c_r = c_q \cdot D = \text{Enc}_{pk}(d_i)$, 
+which decrypts to $d_i$ under the client’s secret key. 
+This construction hides the queried index from the server. 
+When integrated with Fabric chaincode, PIR prevents endorsing peers from linking queries to specific records, while preserving blockchain auditability for writes.
+
+Figure~\ref{fig1} illustrates this contrast. 
+A baseline query call \textit{PublicQueryWithAudit("record012")} explicitly reveals the queried key in the audit log visible to endorsing peers. 
+In contrast, our \textit{PIRQueryWithAudit(encQueryB64)} logs only an opaque Base64-encoded selector, preventing the audit trail or the read-set from exposing query intent.
+
+\begin{figure}[!t]
+    \centerline{\includegraphics[width=3.5in]{figures/fig1.png}}
+    \caption{What endorsing peers ``see'' in audit records. 
+    Left: baseline \textit{PublicQueryWithAudit} exposes the queried key (\textit{record012}). 
+    Right: CPIR-based \textit{PIRQueryWithAudit} exposes only an opaque encrypted selector (\textit{EncQueryB64}), hiding the queried index.\label{fig1}}    
+\end{figure}
+
+The main contributions of this work are:
+\begin{enumerate}
+    \item \textbf{BGV-based CPIR as Fabric chaincode.} We present, to the best of our knowledge, the first fully on-chain implementation of Computational PIR (CPIR) based on the BGV scheme, integrated directly into Hyperledger Fabric chaincode.
+    \item \textbf{Evaluate-phase privacy demonstration.} We provide a side-by-side analysis of baseline vs. CPIR queries, showing how endorsing peers’ visibility is reduced to opaque ciphertexts while preserving Fabric’s normal endorsement and audit mechanisms.
+    \item \textbf{Prototype and benchmarks.} We implement a working system with the Lattigo library and measure client encryption/decryption, peer evaluation, ciphertext size, and end-to-end query latency, demonstrating practical performance for consortium deployments.
+    \item \textbf{Open-Source Release.} To encourage reproducibility and use by other researchers, we open-source the complete CPIR-on-Blockchain system, including chaincode, client, and experimental setup. The repository is available at: \url{https://github.com/artias13/2_2_HLF_CPIR}.
+\end{enumerate}
+
+\subsection{LITERATURE REVIEW}
+
+Privacy in permissioned blockchains has been studied from several angles, but query privacy remains underexplored. 
+
+\textbf{Blockchain Privacy Mechanisms.} 
+Early efforts have emphasized access control and anonymity. 
+Token-based authentication schemes~\cite{huff2021} and access-control contracts~\cite{allouche2020} prevent unauthorized reads or hide participant identities. 
+Differential-sharing frameworks~\cite{dunnett2019} allow producers to regulate how much content is revealed. 
+While effective at controlling \emph{who} sees data, these mechanisms do not conceal \emph{which} records are queried. 
+Queries themselves remain visible to endorsing peers.
+
+\textbf{PIR and FHE Applications.}
+A line of work has applied Private Information Retrieval (PIR) or Fully Homomorphic Encryption (FHE) to protect data access. 
+Tan et al.~\cite{tan2019} use CPIR to hide vehicular location queries. 
+Chakraborty et al.~\cite{chakraborty2020} propose BRON, combining PIR with zero-knowledge proofs for human-resource data. 
+Mazmudar et al.~\cite{mazmudar2021} integrate PIR with IPFS for private queries in distributed file sharing, while Hameed et al.~\cite{hameed2022} present DEBPIR, embedding an Oblivious Transfer–based PIR into Fabric smart contracts. 
+These works demonstrate the feasibility of PIR in distributed settings but often rely on off-chain servers or specialized cryptographic protocols.
+
+\textbf{On-Chain CPIR Gap.}
+Existing solutions for Fabric focus on access restriction (channels, PDC) or enclave-based confidentiality (FPC). 
+Recent PIR-based proposals either target off-chain databases or prototype OT-based protocols. 
+To our knowledge, no prior system has directly integrated a lattice-based CPIR scheme into Fabric chaincode. 
+Our work closes this gap by embedding a BGV-based PIR workflow directly in Fabric’s evaluate path, ensuring that endorsing peers cannot infer queried indices while preserving normal endorsement and auditability.
+
+\subsection{ORGANIZATION}
+
+The remainder of this paper is organized as follows: Section~II surveys related work on PIR and blockchain privacy. Section~III presents the system model and threat assumptions. Section~IV details the design and implementation of CPIR in Fabric. Section~V evaluates performance. Section~VI discusses limitations and future directions, and Section~VII concludes the paper.
+
+\section{PRELIMINARIES}\label{sec:preliminaries}
+
+\subsection{TECHNOLOGY BACKGROUND}
+
+\emph{a) Fabric Native Privacy Techniques:}
+Hyperledger Fabric separates roles among endorsing peers, committing peers, and the ordering service. 
+Endorsing peers execute chaincode proposals and therefore observe function arguments, logs, and read-sets, making their administrators the natural adversaries for read privacy. 
+Protecting reads in Fabric thus requires hiding query intent from endorsers.
+
+Fabric already offers several native privacy mechanisms, each addressing a different dimension of confidentiality:
+\begin{itemize}
+    \item \emph{Separate Channels.} Multi-channel partitioning isolates ledgers across subgroups of organizations, limiting which participants observe which data. 
+    However, channel separation controls \emph{who} sees a ledger, not \emph{what} is accessed inside that ledger. 
+    Query intent remains visible to all endorsers of a channel.
+    
+    \item \emph{Private Data Collections (PDC).} PDCs restrict which organizations store and access private key–value pairs. 
+    The shared ledger records only hashes, while members of the collection hold plaintext. 
+    PDCs provide access control but still expose function arguments to endorsers inside the collection, leaving query patterns observable.
+    
+    \item \emph{Fabric Private Chaincode (FPC).} FPC executes chaincode within Intel SGX enclaves. 
+    Arguments and state are protected even from peer operators, but this requires Trusted Execution Environments (TEEs) and attestation, introducing additional hardware and trust assumptions.
+\end{itemize}
+
+In summary, Fabric’s native privacy tools govern data visibility and execution confidentiality. 
+They are orthogonal to Private Information Retrieval (PIR): PDC and FPC restrict who can see data, while PIR hides what data is queried.
+
+
+\emph{b) Private Information Retrieval Basics:}
+PIR protocols enable a client to retrieve a record without revealing which record was requested. 
+They fall into two categories:
+
+\emph{Information-Theoretic PIR (IT-PIR).} Provides unconditional privacy by distributing the database across multiple non-colluding servers. 
+A client queries subsets of servers such that no single server learns the selection index.
+
+\emph{Computational PIR (CPIR).} Achieves privacy with a single server, relying on hardness assumptions and homomorphic encryption. 
+For a database $D=\{d_0,\dots,d_{n-1}\}$ and a one-hot selection vector $v_i$, the client computes 
+\[
+c_q = \text{Enc}_{pk}(v_i), \qquad c_r = c_q \cdot D = \text{Enc}_{pk}(d_i).
+\]
+The server returns $c_r$, which the client decrypts as $d_i = \text{Dec}_{sk}(c_r)$. 
+Thus the queried index $i$ remains hidden from the server.
+
+CPIR avoids the need for multiple servers, making it attractive in blockchain settings where peers cannot be assumed non-colluding.
+%\noindent 
+
+\emph{c) BGV Homomorphic Encryption:}
+Our construction relies on the Brakerski–Gentry–Vaikuntanathan (BGV) scheme, a lattice-based homomorphic encryption system supporting both addition and multiplication over ciphertexts. 
+BGV is defined over polynomial rings modulo a large ciphertext modulus and enables \emph{batching}, where multiple plaintext elements are packed into a single ciphertext. 
+This capability allows efficient evaluation of structured queries and underpins the polynomial database representation used in our Fabric integration.
+
+\subsection{Notation}
+We summarize the main notation used throughout the paper in Table~\ref{tab:notation}. Scalars are lower-case ($a$), vectors are bold ($\mathbf{x}$), sets are calligraphic ($\mathcal{S}$), algorithms are sans-serif ($\mathsf{Alg}$), and ciphertexts are prefixed by $ct$.
+
+\noindent\textit{Remark.} We write $ct_r = ct_q \cdot m_{\mathrm{DB}}$ to denote BGV ciphertext–plaintext multiplication with batching; concretely, this realizes
+\[
+\mathsf{Enc}_{pk}(v_i)\ \cdot\ m_{\mathrm{DB}}\ =\ \mathsf{Enc}_{pk}(d_i).
+\]
+
+\subsection{Design Goals}
+Our design is guided by the following goals:
+\begin{itemize}
+    \item \textbf{Query privacy.} Endorsing peers executing chaincode must not learn which record is being queried. 
+    \item \textbf{Auditability.} Fabric’s endorsement and logging workflow should remain intact, ensuring that writes remain transparent and accountable.
+    \item \textbf{Practicality.} Encryption, evaluation, and decryption latencies must remain within practical limits for deployment in consortium networks.
+    \item \textbf{Compatibility.} The protocol must run as standard Fabric chaincode without requiring protocol extensions or specialized hardware.
+\end{itemize}
+
+\begin{table}[!t]
+    \caption{Notation}
+    \label{tab:notation}
+    \centering
+    \renewcommand{\arraystretch}{1.1}
+    \begin{tabular}{l l}
+    \hline
+    Symbol & Description \\
+    \hline
+    $\lambda$ & Security parameter \\
+    $n$ & Database size; index domain $[n]=\{0,\dots,n-1\}$ \\
+    $D=\{d_0,\dots,d_{n-1}\}$ & Database records (serialized bytes/words) \\
+    $m_{\mathrm{DB}}$ & Plaintext polynomial representation of $D$ (BGV batching) \\
+    $v_i$ & One-hot selection vector for index $i$ \\
+    $pk, sk$ & Public / secret keys (BGV) \\
+    $ct_q=\mathsf{Enc}_{pk}(v_i)$ & Encrypted query (ciphertext) \\
+    $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response; $ct_r=\mathsf{Enc}_{pk}(d_i)$ \\
+    $d_i = \text{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
+    $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$ & Key generation \\
+    $\mathsf{Enc}_{pk}(\cdot)$, $\mathsf{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
+    $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (here: ct–pt multiply) \\
+    $N,q,t$ & BGV ring degree and moduli (ciphertext $q$, plaintext $t$) \\
+    $|\cdot|,\ \mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
+    $\mathcal{C}$, $\mathcal{E}$, $\mathcal{O}$, $\mathcal{P}$ & Client; endorsing peers; orderer; committing peers \\
+    $\textsf{evaluate}$, $\textsf{submit}$ & Fabric read / write transaction phases \\
+    %$\textsf{InitLedger}$, $\textsf{GetMetadata}$, $\textsf{PIRQuery}$ & Chaincode entry points \\
+    $\mathcal{L}$ & Leakage considered (ciphertext size, timing; defined later) \\
+    \hline
+    \end{tabular}
+\end{table}
+
+\subsection{Cryptographic Primitives}
+
+We instantiate Computational Private Information Retrieval (CPIR) as a tuple of probabilistic polynomial-time algorithms
+\[
+\Pi = (\mathsf{KeyGen}, \mathsf{Enc}, \mathsf{Eval}, \mathsf{Dec}),
+\]
+defined as follows:
+
+\begin{itemize}
+    \item $\mathsf{KeyGen}(\lambda) \rightarrow (pk, sk)$: On input the security parameter $\lambda$, output a public key $pk$ and a secret key $sk$.
+    \item $\mathsf{Enc}_{pk}(v_i) \rightarrow ct_q$: Given a one-hot selection vector $v_i \in \{0,1\}^n$, produce an encrypted query ciphertext $ct_q$ under $pk$.
+    \item $\mathsf{Eval}(ct_q, m_{\mathrm{DB}}) \rightarrow ct_r$: Given an encrypted query $ct_q$ and the plaintext database polynomial $m_{\mathrm{DB}}$, homomorphically evaluate the product to obtain an encrypted response $ct_r$.
+    \item $\mathsf{Dec}_{sk}(ct_r) \rightarrow d_i$: Using the secret key $sk$, decrypt the response ciphertext $ct_r$ to recover the desired record $d_i$.
+\end{itemize}
+
+\noindent Correctness requires that for all $i \in [n]$,
+\[
+\mathsf{Dec}_{sk}\!\left(\mathsf{Eval}\!\left(\mathsf{Enc}_{pk}(v_i), m_{\mathrm{DB}}\right)\right) = d_i.
+\]
+
+\paragraph{Instantiation with BGV.} 
+We employ the Brakerski–Gentry–Vaikuntanathan (BGV) lattice-based homomorphic encryption scheme to realize $\Pi$. 
+BGV supports addition and multiplication on encrypted vectors and enables \emph{batching}, where multiple plaintext slots are packed into one ciphertext. 
+In our design, this batching is used to embed the ledger’s key–value table into a single polynomial $m_{\mathrm{DB}}$, allowing efficient evaluation of PIR queries inside chaincode.
+
+\section{Proposed System}
+
+\subsection{System Model}
+In this article, we introduce a blockchain-based query privacy system designed for permissioned ledgers. 
+The system enables clients to privately retrieve records while maintaining Hyperledger Fabric’s endorsement and audit workflow through smart contracts. 
+The novelty of our approach lies in the integration of computational Private Information Retrieval (CPIR) into Fabric chaincode using the Brakerski--Gentry--Vaikuntanathan (BGV) homomorphic encryption scheme. 
+This design allows endorsing peers to execute read-only queries over encrypted inputs without learning which record was accessed. 
+To safeguard query confidentiality and mitigate the risk of access-pattern leakage, we employ a combination of homomorphic encryption and Fabric’s chaincode execution model. 
+This approach ensures that clients remain the sole holders of decryption keys, while peers perform only black-box computations, thereby enhancing overall privacy without requiring trusted hardware or protocol modifications.
+
+\noindent Our system is composed of the following entities:
+
+\begin{itemize}
+    \item \textbf{Data Owner (DO):} In our context, the Data Owners are the endorsing peers of the Hyperledger Fabric network. 
+    They maintain the plaintext polynomial representation of the ledger database $m_{\mathrm{DB}}$ in their world state. 
+    Upon receiving an encrypted query, the DO executes the PIR chaincode, homomorphically evaluates the query against $m_{\mathrm{DB}}$, and returns only the encrypted response $ct_r$. 
+    The DO is modeled as \emph{honest-but-curious}, faithfully executing the protocol but potentially attempting to infer query intent from observed arguments or logs.
+
+    \item \textbf{Data Requester (DR):} The Data Requester is a client organization that wishes to privately obtain a record from the ledger. 
+    The DR generates a homomorphic encryption key pair $(pk,sk)$, constructs a one-hot encrypted query $ct_q = \mathsf{Enc}_{pk}(v_i)$, and submits it via the PIR chaincode interface. 
+    Only the DR holds the secret key $sk$ and is able to decrypt the response to recover the requested record $d_i$.
+
+    \item \textbf{Ordering Service (OS):} The ordering service provides consensus by sequencing transactions into blocks. 
+    Since PIR queries are executed during the \textsf{evaluate} phase (read-only proposals, not committed to the ledger), the OS is not directly involved in query privacy. 
+    Its role is limited to normal write operations, ensuring global ordering and consistency of the ledger.
+
+    \item \textbf{Committing Peers (CP):} These peers validate endorsed transactions and update the world state after block commitment. 
+    As with the OS, committing peers are unaffected by PIR queries but remain essential for preserving ledger integrity and synchronization across the consortium.
+
+    \item \textbf{Gateway (PF):} The Gateway refers to the Fabric chaincode interface through which DRs and DOs interact. 
+    It is not a trusted third party, but rather a set of deterministic smart contracts that coordinate CPIR operations. 
+    The Gateway ensures that encrypted queries and responses flow correctly between DRs and DOs, while preventing any alteration of sensitive data. 
+    All trust-critical logic (query evaluation, ciphertext serialization, and endorsement) is encapsulated in chaincode, ensuring tamper-resistance and transparency without relying on an external intermediary.
+\end{itemize}
+
+\noindent\textit{Remark.} 
+In Hyperledger Fabric, the term ``ledger'' encompasses both the blockchain log of all transactions and the world state snapshot of the latest key--value pairs. 
+Our scheme operates on the world state: the plaintext polynomial $m_{\mathrm{DB}}$ represents the current key--value table at the time of query. 
+Thus PIR evaluation retrieves records from the up-to-date database snapshot, not from historical transaction logs.
+
+\subsection{Security Assumptions and Threat Model}
+
+Our design follows the standard \emph{honest-but-curious} adversarial model. 
+Endorsing peers (DOs) are assumed to correctly execute chaincode but may attempt to infer sensitive information from inputs, logs, or read-sets. 
+We explicitly consider the following assumptions and threats:
+
+\begin{itemize}
+    \item \textbf{Honest-but-curious endorsers.} Endorsing peers are the primary adversarial vantage point. 
+    They can observe all chaincode inputs during \textsf{evaluate} calls and may record ciphertexts, metadata, or execution traces. 
+    Their goal is to infer the index of the queried record.
+
+    \item \textbf{Network adversaries.} External attackers may eavesdrop on ciphertexts transmitted between Data Requesters (DRs) and Data Owners (DOs). 
+    Security relies on the hardness assumptions of the BGV homomorphic encryption scheme; without the secret key $sk$, ciphertexts are indistinguishable from random.
+
+    \item \textbf{Out-of-scope threats.} We do not address traffic analysis (e.g., repeated queries, frequency analysis) or timing side-channels (e.g., differences in execution latency). 
+    These leakages are orthogonal to our CPIR construction and are discussed as future work.
+\end{itemize}
+
+\noindent \textbf{Security objective.} 
+The system ensures that, for any query index $i \in [n]$, endorsing peers and external observers cannot distinguish which record $d_i$ was requested. 
+The only permissible leakage is ciphertext size and protocol timing, denoted collectively as $\mathcal{L}$.
+
+
+\subsection{System Overview}
+
+The proposed system integrates computational Private Information Retrieval (CPIR) directly into Hyperledger Fabric chaincode. 
+Its purpose is to ensure that query indices remain hidden from endorsing peers while preserving Fabric’s endorsement and audit workflow. 
+At a high level, the workflow consists of four stages, illustrated in Fig.~\ref{fig:system-overview}.
+
+\begin{enumerate}
+    \item \textbf{Ledger initialization.} 
+    Data Owners (DOs) encode the database $D=\{d_0,\dots,d_{n-1}\}$ into a plaintext polynomial $m_{\mathrm{DB}}$ and store it in the Fabric world state through the \textsf{InitLedger} function.
+    
+    \item \textbf{Metadata discovery.} 
+    Data Requesters (DRs) obtain structural parameters such as the number of records $n$ and slots per record using lightweight chaincode calls (e.g., \textsf{GetMetadata}). 
+    This step reveals no sensitive content and is necessary to construct valid PIR queries.
+    
+    \item \textbf{Private retrieval.} 
+    The DR generates a one-hot vector $v_i$ for the desired index $i$, encrypts it into $ct_q=\mathsf{Enc}_{pk}(v_i)$, and submits it via the \textsf{PIRQuery} function. 
+    The DO evaluates $ct_q$ against $m_{\mathrm{DB}}$ to compute $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})=\mathsf{Enc}_{pk}(d_i)$ and returns the ciphertext.
+    
+    \item \textbf{Decryption.} 
+    The DR decrypts $ct_r$ using $sk$, recovering $d_i=\mathsf{Dec}_{sk}(ct_r)$. 
+    Only the requester can reconstruct the plaintext record, while endorsing peers learn nothing about which index was queried.
+\end{enumerate}
+
+This design ensures that all Fabric entities retain their original roles: endorsers execute queries, the ordering service and committing peers manage writes, and clients hold cryptographic keys. 
+The novelty is that endorsing peers now operate exclusively on encrypted selectors, making query intent indistinguishable.
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=3.3in]{figures/diagrams/1_workflow.png}
+    \caption{System overview. A Data Requester (DR) submits an encrypted query $ct_q$ via the chaincode interface. The Data Owner (DO) evaluates it against the database polynomial $m_{\mathrm{DB}}$ and returns an encrypted response $ct_r$, which only the DR can decrypt.}
+    \label{fig:system-overview}
+\end{figure}
+
+
+\subsection{Encoding and Packing Strategy}
+
+To enable PIR queries over structured ledger data, we must embed records into a plaintext polynomial $m_{\mathrm{DB}}$ suitable for BGV evaluation. 
+Our prototype adopts a fixed-width packing strategy, illustrated in Fig.~\ref{fig:polynomial-construction}, which proceeds in four steps.
+
+\paragraph{Step 1: Serialize to Byte Array.} 
+Each ledger record $d_i$ is serialized as a UTF-8 byte array. 
+In our motivating use case of Cyber Threat Intelligence (CTI) sharing, JSON objects containing fields such as hash digests and threat levels are flattened into byte sequences. 
+Every character is represented by its ASCII code in $[0,255]$. 
+This ensures that arbitrary structured records can be embedded in the polynomial without loss of information.
+
+\paragraph{Step 2: Calculate Window Size.} 
+We compute the slot allocation per record as
+\[
+\textit{slotsPerRecord} = \left\lceil \frac{\textit{maxLen}}{\textit{bytesPerSlot}} \right\rceil,
+\]
+where \textit{maxLen} is the maximum observed record length. 
+For example, if the largest record is 126 bytes and each slot holds one byte, then each record is allocated 128 slots. 
+This guarantees uniform slot windows across all records, simplifying query construction at the cost of potential padding overhead.
+
+\paragraph{Step 3: Pack into Coefficient Vector.} 
+Serialized byte arrays are inserted into disjoint slot windows within a coefficient vector 
+$d = (d_0, d_1, \dots, d_{N-1})$, 
+where $N=2^{\log N}$ is the ring capacity of the BGV scheme. 
+Padding zeros are added if a record is shorter than the fixed window. 
+Thus each record $d_i$ maps to a contiguous slot interval that can be selectively retrieved via a PIR query.
+
+\begin{figure*}[!ht]
+    \centering
+    \includegraphics[width=3.3in]{figures/diagrams/2_polynomial_construction.png}
+    \caption{PTDB construction from JSON to plaintext polynomial. 
+    Each record is serialized to bytes, mapped into a fixed slot window, and packed into a coefficient vector $d$. 
+    The vector is then encoded as a BGV plaintext polynomial $m_{\mathrm{DB}}$, which is stored in the Fabric world state.}
+    \label{fig:polynomial-construction}
+\end{figure*}
+
+\paragraph{Step 4: Encode into Polynomial.} 
+Finally, the coefficient vector $d$ is encoded into a plaintext polynomial
+\[
+m_{\mathrm{DB}}(X) = \sum_{j=0}^{N-1} d_j X^j \in R_t,
+\]
+where $R_t = \mathbb{Z}_t[X]/(X^N+1)$. 
+This polynomial serves as the plaintext database representation stored in the Fabric world state. 
+Endorsing peers operate over $m_{\mathrm{DB}}$ during PIR queries, while clients recover only the slots corresponding to their requested record.
+
+\noindent This four-step construction balances simplicity and generality. 
+While fixed-width packing introduces some wasted slots, it guarantees consistent indexing and enables record-level PIR retrieval. 
+Selective field-level retrieval would require adaptive packing with variable slot windows, which we leave as future work.
+
+
+
+\subsection{Packing Constraints}
+
+Our experiments revealed two principal constraints that govern which parameter configurations are feasible when embedding ledger records into the polynomial $m_{\mathrm{DB}}$. 
+These constraints restrict the joint choice of ring dimension $N=2^{\log N}$, number of records $n$, and slot allocation per record.
+
+\paragraph{Constraint 1: Ring capacity.} 
+The first limitation arises from the size of the ciphertext ring, which determines the total number of available slots. 
+Formally,
+\[
+n \cdot \textit{slotsPerRecord} \leq N.
+\]
+Any configuration violating this condition exceeds the polynomial capacity and must be rejected. 
+For example, with $\log N = 13$ (so $N=8192$ slots) and $\textit{slotsPerRecord}=224$, the system can pack at most $\lfloor 8192/224 \rfloor = 36$ records.
+
+\paragraph{Constraint 2: Record size.} 
+The second limitation is dictated by the serialization of structured records into bytes. 
+In our motivating CTI use case, each record contains fields such as cryptographic hashes (MD5, SHA-256), malware classification, detection counts, and severity labels. 
+When serialized into JSON and converted to bytes, this yields a base size of approximately $113$–$125$ bytes, depending on field content. 
+Thus, each record must be allocated at least $\textit{baseSize}$ slots to fit completely. 
+Formally,
+\[
+\textit{slotsPerRecord} \geq \textit{baseSize}.
+\]
+Otherwise, records would be truncated and decryption would fail. 
+As an example, although $\log N=13$ ($N=8192$ slots) theoretically allows $n=128$ records with $\textit{slotsPerRecord}=64$, this configuration is infeasible because the base record size ($\approx 113$ bytes) exceeds the available slot budget.
+
+\noindent Only configurations satisfying both constraints are feasible. 
+Figure~\ref{fig:exp-matrix} plots the feasible parameter space across different $\log N$ values, showing how record size and ring capacity jointly restrict the maximum database size. 
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=3.4in]{figures/diagrams/exp_matrix.png}
+    \caption{Feasible configurations in the experimental matrix. 
+    Each point corresponds to a $(\log N, \textit{slotsPerRecord}, n)$ tuple that satisfies both ring capacity and record size constraints. 
+    Configurations violating either constraint are rejected.}
+    \label{fig:exp-matrix}
+\end{figure}
+
+
+
+
+\section{CONCLUSION}
+The conclusion goes here.
+
+\section*{APPENDIX}
+Appendixes, if needed, appear before the acknowledgment.
+
+
+\section*{ACKNOWLEDGMENT}
+The preferred spelling of the word ``acknowledgment'' in
+American English is without an ``e'' after the ``g.'' Use the
+singular heading even if you have many acknowledgments.
+Avoid expressions such as ``One of us (S.B.A.) would like
+to thank . . . .'' Instead, write ``F. A. Author thanks . . . .'' In
+most cases, sponsor and financial support acknowledgments
+are placed in the unnumbered footnote on the first page, not
+here.
+
+%\section*{REFERENCES}
+
+\bibliographystyle{IEEEtran}
+\bibliography{bibliography}
+
+
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{a1.png}}]
+{FIRST A. AUTHOR}~(Fellow, IEEE)~and all authors may include biographies.
+Biographies are often not included in conference-related papers. This author
+is an IEEE Fellow. The first paragraph may contain a place and/or date of
+birth (list place, then date). Next, the author's educational background is
+listed. The degrees should be listed with type of degree in what field,
+which institution, city, state, and country, and year the degree was earned.
+The author's major field of study should be lower-cased.
+
+The second paragraph uses the pronoun of the person (he or she) and not the
+author's last name. It lists military and work experience, including summer
+and fellowship jobs. Job titles are capitalized. The current job must have a
+location; previous positions may be listed without one. Information
+concerning previous publications may be included. Try not to list more than
+three books or published articles. The format for listing publishers of a
+book within the biography is: title of book (publisher name, year) similar
+to a reference. Current and previous research interests end the paragraph.
+
+The third paragraph begins with the author's title and last name
+(e.g., Dr.\ Smith, Prof.\ Jones, Mr.\ Kajor, Ms.\ Hunter). List any memberships in
+professional societies other than the IEEE. Finally, list any awards and
+work for IEEE committees and publications. If a photograph is provided, it
+should be of good quality, and professional-looking.
+\end{IEEEbiography}
+
+
+\begin{IEEEbiographynophoto}
+{SECOND B. AUTHOR,} photograph and biography not available at the time
+of publication.
+\end{IEEEbiographynophoto}
+
+
+\begin{IEEEbiographynophoto}
+{THIRD C. AUTHOR JR.}~(Member, IEEE), photograph and biography not available
+at the time of publication.
+\end{IEEEbiographynophoto}
+
+\vfill\pagebreak
+
+\end{document}

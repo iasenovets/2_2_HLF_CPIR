@@ -1,4 +1,4 @@
-module pir_rest_server_ms
+module off-chain-cpir
 
 go 1.24.1
 

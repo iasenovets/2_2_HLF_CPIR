@@ -1,0 +1,91 @@
+@startuml
+!theme plain
+skinparam linetype ortho
+skinparam packageStyle rectangle
+
+title PTDB Construction: From JSON to Plaintext Polynomial
+
+rectangle "1. Serialize to Byte Array" as step1
+note top of step1
+  **Encoding:**
+    • Each JSON string is serialized using UTF-8 (ASCII-compatible for all characters used).
+    • Every character → 1 byte since only standard ASCII symbols are present.
+      Examples: {, }, "a"-"z", "0"-"9", ":" , ","
+    
+  **CTI Records (JSON Strings):**
+  • Record 0 (126 bytes):
+    {"md5":"7fc5...","malware_family":"Emotet","threat_level":"Low"}
+
+  • Record 1 (127 bytes):
+    {"md5":"bde4...","malware_family":"WannaCry","threat_level":"High"}
+
+  • Record 63 (125 bytes):
+    {"md5":"3e9c...","malware_family":"AgentTesla","threat_level":"Medium"
+
+  **Byte Representation:**
+    Record 0 → [123, 34, 109, 100, 53, 34, 58, 34, 55, ... , 125]
+                '{'  '"'  'm'  'd'  '5'  '"'  ':'  '"'  '7'      '}'
+
+    Record 1 → [123, 34, 109, 100, 53, 34, 58, 34, 98, ... , 125]
+                '{'  '"'  'm'  'd'  '5'  '"'  ':'  '"'  'b'      '}'
+
+  **Notes:**
+    • Numbers in brackets = Decimal ASCII codes (0-255).
+    • Example mapping: '{' = 123, '"' = 34, 'm' = 109, 'd' = 100, '5' = 53
+    • Final size varies (125-127 bytes) depending on record content.
+end note
+
+
+rectangle "2. Calculate Window Size (slotsPerRecord)" as step2
+note top of step2
+  Max Length = 126 bytes (from Record 0)
+  slotsPerRecord = ((126 + 7) / 8) * 8 = 128 slots
+end note
+
+rectangle "3. Pack Byte Arrays into Coefficient Vector d[]" as step3
+note top of step3
+**Ring Capacity:** N = 8192 slots (LogN = 13)
+
+**Structure:**
+d = [d₀, d₁, …, d₈₁₉₁]
+
+| Window 0 (Rec 0) | Window 1 (Rec 1) | … | Window 63 (Rec 63) |
+| Slots 0-127      | Slots 128-255    | … | Slots 8064-8191     |
+
+**Example Layout (simplified):**
+[123, 34, …, 125, 0, 0 | 123, 34, …, 125, 0 | … | 123, …, 125, 0, 0]
+
+- Record 0: 126 bytes + 2 pad → Slots [0-127]
+- Record 1: 127 bytes + 1 pad → Slots [128-255]
+- …
+- Record 63: 125 bytes + pad → Slots [8064-8191]
+
+**Index Examples:**
+- d₀ = 123   (First byte of Record 0)
+- d₁₂₅ = 125 (Last byte of Record 0)
+- d₁₂₆ = 0   (Padding)
+- d₁₂₇ = 0   (Padding)
+- d₁₂₈ = 123 (First byte of Record 1)
+- ...
+- d₈₁₉₁ = 0   (Padding)
+end note
+
+rectangle "4. BGV Encode Vector into a Polynomial" as step4
+note top of step4
+  Using BGV Encoder on the vector d:
+
+  <math> m_D_B(X) = d_0*X^0 + d_1*X^1 + d_2*X^2 + ... + d_8191*X^8191 </math>
+
+  This polynomial is the final PTDB.
+end note
+
+rectangle "FINAL OUTPUT" as final_output
+note top of final_output
+  PTDB (Plaintext Database Stored on Ledger)
+end note
+
+step1 --> step2
+step2 --> step3
+step3 --> step4
+step4 --> final_output
+@enduml

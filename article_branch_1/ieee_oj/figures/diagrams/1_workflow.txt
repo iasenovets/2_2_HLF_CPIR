@@ -1,0 +1,117 @@
+@startuml
+!theme plain
+skinparam linetype ortho
+skinparam defaultTextAlignment left
+skinparam sequenceArrowThickness 1.5
+skinparam sequenceParticipantPadding 30
+skinparam sequenceMessageAlign left
+
+title CPIR-Enabled Private Retrieval Workflow in Hyperledger Fabric
+
+actor "Org A Client" as OrgA
+actor "Org B Client" as OrgB
+participant "Chaincode\n(PIR Interface)" as Chaincode
+database "Ledger (PTDB State)" as Ledger
+ 
+== Ledger Initialization ==
+OrgA -> Chaincode : InitLedger(n, maxJsonLength, channel)
+activate Chaincode
+Chaincode -> Chaincode : createParams(logN <- channel)
+note right
+<math>N = 2^{logN}</math> (slots in ring)
+<math>LogN ∈ {13,14,15}</math>
+<math>LogQ = [54]</math>
+<math>T = 65537</math>
+end note
+Chaincode -> Chaincode : generateRecords(n, channel, maxJsonLength)
+note right
+Create synthetic JSON CTI records:
+Size ≤ maxJsonLength
+Examples:
+{ "md5": "...", "threat_level": "High" }
+end note
+Chaincode -> Chaincode : calcSlotsPerRec()
+note right
+<math>slotsPerRec = ceil({maxLen} / 8) × 8</math>
+e.g. maxLen = 217 → 224 slots
+end note
+Chaincode -> Chaincode : validateRingCapacity()
+note right
+<math>requiredSlots = dbsize_n × slotsPerRec</math>
+If:
+<math>requiredSlots > N -> reject </math>
+end note
+Chaincode -> Chaincode : packRecordsLoop()
+note right
+Place each byte in slot:
+<math>m_(DB)(X) = sum_(i=0)^(N-1) d_i X^i</math>
+<math>d_i ∈ [0,255]</math>
+end note
+Chaincode -> Chaincode : encodeIntoPolynomial(<math>m_D_B</math>)
+Chaincode -> Ledger : stub.PutState("PTDB", encoded DB)
+deactivate Chaincode
+
+== Metadata Discovery ==
+OrgB -> Chaincode : publicQueryALL()
+activate Chaincode
+Chaincode -> Ledger : stub.GetState("PTDB")
+Chaincode --> OrgB : totalRecords = n
+deactivate Chaincode
+
+OrgB -> Chaincode : getSlotsPerRecord()
+activate Chaincode
+Chaincode -> Ledger : stub.GetState("slotsPerRecord")
+Chaincode --> OrgB : slotsPerRecord = s
+deactivate Chaincode
+
+== Private Information Retrieval ==
+group Client-Side Preparation
+    OrgB -> OrgB : makeSelectionVector() 
+note right
+<math> v={(1 if j∈{i⋅s,i⋅s+1,…,i⋅s+s-1}), (otherwise (0)):}</math>
+endnote
+    OrgB -> OrgB : encodeVectorToPolynomial()
+note right
+<math> m_q (X)=v_0 +v_1 X+v_2 X^2+⋯+v_(N-1) X^(N-1)</math>
+endnote
+    OrgB -> OrgB : encryptPolynomial()
+note right
+<math> ct_q = Enc_(pk) (m_q)∈R_q^2</math>
+endnote
+    OrgB -> OrgB : marshalBinary() → ctBytes[]
+    OrgB -> OrgB : b64Encode() → encQueryB64
+end
+
+OrgB -> Chaincode : PIRQuery(encQueryB64)
+activate Chaincode
+Chaincode -> Chaincode : b64Decode() → ctBytes[]
+Chaincode -> Chaincode : unmarshalBinary() → <math>ct_q</math>
+Chaincode -> Ledger : stub.GetState("PTDB")
+Chaincode -> Chaincode : homomorphicEval() 
+note right
+<math> ct_r=Eval(ct_q⋅m_D_B)=Enc(v⋅m_D_B)</math>
+endnote
+Chaincode -> Chaincode : marshalBinary() → ctResultBytes[]
+Chaincode -> Chaincode : b64Encode() → encResultB64
+Chaincode --> OrgB : encResultB64
+deactivate Chaincode
+
+== Local Decryption and Reconstruction ==
+group Client-Side Post-Processing
+    OrgB -> OrgB : b64Decode() → ctResultBytes[]
+    OrgB -> OrgB : unmarshalBinary() → <math>ct_r</math>
+    OrgB -> OrgB : decryptCt()
+note right
+<math> m'(X)=Dec_(sk) (ct_r )∈R_T</math>
+endnote
+    OrgB -> OrgB : determineSlotInterval()
+note right
+<math>j∈[i⋅s,(i+1)⋅s-1)</math>
+endnote
+    OrgB -> OrgB : collectNonZeroBytes()
+note right
+<math> u=(m'_(i⋅s) ,m'_(i⋅s+1) ,…,m'_((i+1)⋅s-1) )</math>
+endnote
+    OrgB -> OrgB : Decode bytes → JSON object
+end
+@enduml
