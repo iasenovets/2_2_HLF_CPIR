@@ -86,7 +86,7 @@ A baseline query call \textit{PublicQueryWithAudit("record012")} explicitly reve
 In contrast, our \textit{PIRQueryWithAudit(encQueryB64)} logs only an opaque Base64-encoded selector, preventing the audit trail or the read-set from exposing query intent.
 
 \begin{figure}[!t]
-    \centerline{\includegraphics[width=3.5in]{figures/fig1.png}}
+    \centerline{\includegraphics[width=\columnwidth]{figures/diagrams/0_pir.png}}
     \caption{What endorsing peers ``see'' in audit records. 
     Left: baseline \textit{PublicQueryWithAudit} exposes the queried key (\textit{record012}). 
     Right: CPIR-based \textit{PIRQueryWithAudit} exposes only an opaque encrypted selector (\textit{EncQueryB64}), hiding the queried index.\label{fig1}}    
@@ -216,8 +216,9 @@ Our design is guided by the following goals:
     $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$ & Key generation \\
     $\mathsf{Enc}_{pk}(\cdot)$, $\mathsf{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
     $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (ct–pt multiply) \\
-    $N$ & Ring dimension ($N=2^{\log N}$) \\
-    $q,\, t$ & Ciphertext modulus $q$ and plaintext modulus $t$ (BGV) \\
+    $N$ & Ring dimension ($N=2^{\log N}$) (BGV) \\
+    $q$ & Ciphertext modulus (BGV) \\
+    $t$ & Plaintext modulus (BGV) \\
     $record_s$ & Slots allocated per record (slot window size) \\
     $record_b$ & Base serialized size of a record in bytes \\
     $record_{\mu,\log N}$ & Template-specific minimum record size at security level $\log N$ \\
@@ -348,11 +349,10 @@ The novelty is that endorsing peers now operate exclusively on encrypted selecto
 
 \begin{figure}[!t]
     \centering
-    \includegraphics[width=3.3in]{figures/diagrams/1_workflow.png}
+    \includegraphics[width=\columnwidth]{figures/diagrams/1_workflow.png}
     \caption{System overview. A Data Requester (DR) submits an encrypted query $ct_q$ via the chaincode interface. The Data Owner (DO) evaluates it against the database polynomial $m_{\mathrm{DB}}$ and returns an encrypted response $ct_r$, which only the DR can decrypt.}
     \label{fig:system-overview}
 \end{figure}
-
 
 \subsection{Encoding and Packing Strategy}
 
@@ -365,6 +365,15 @@ In our motivating use case of Cyber Threat Intelligence (CTI) sharing, JSON obje
 Every character is represented by its ASCII code in $[0,255]$. 
 This ensures that arbitrary structured records can be embedded in the polynomial without loss of information.
 
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/diagrams/2_polynomial_construction.png}
+    \caption{$m_{\mathrm{DB}}$ construction from JSON to plaintext polynomial. 
+    Each record is serialized to bytes, mapped into a fixed slot window $record_s$, and packed into a coefficient vector $c$. 
+    The vector is then encoded as a BGV plaintext polynomial $m_{\mathrm{DB}}$, which is stored in the Fabric world state.}
+    \label{fig:polynomial-construction}
+\end{figure*}
+
 \paragraph{Step 2: Calculate Slot Window.} 
 We determine the slot allocation per record as
 \[
@@ -374,15 +383,6 @@ where $record_b$ is the maximum serialized record length observed in bytes.
 In our prototype, each slot stores exactly one byte.  
 For example, if the largest record is $126$ bytes, then $record_s = \lceil 126/1 \rceil = 126$, which rounds up to $128$ slots due to the discrete window policy.  
 This guarantees uniform slot windows across all records, simplifying query construction at the cost of potential padding overhead.
-
-\begin{figure*}[!ht]
-    \centering
-    \includegraphics[width=3.3in]{figures/diagrams/2_polynomial_construction.png}
-    \caption{PTDB construction from JSON to plaintext polynomial. 
-    Each record is serialized to bytes, mapped into a fixed slot window $record_s$, and packed into a coefficient vector $d$. 
-    The vector is then encoded as a BGV plaintext polynomial $m_{\mathrm{DB}}$, which is stored in the Fabric world state.}
-    \label{fig:polynomial-construction}
-\end{figure*}
 
 \paragraph{Step 3: Pack into Coefficient Vector.} 
 Serialized byte arrays are inserted into disjoint slot windows of length $record_s$ within a coefficient vector 
@@ -474,7 +474,7 @@ where $s = \mathit{slotsPerRecord}$. A configuration is feasible iff $\mathsf{Ca
 
 \begin{figure}[!t]
     \centering
-    \includegraphics[width=3.4in]{figures/diagrams/iasen3.png}
+    \includegraphics[width=\columnwidth]{figures/diagrams/3_feasible_configs.png}
     \caption{Feasible configurations under all constraints. 
     Dashed curves: ring capacity for $\log N \in \{13,14,15\}$. 
     Vertical lines: template-driven minima $record_{\mu,\log N}$ (Constraint~2). 
@@ -488,6 +488,47 @@ This constraint system creates a natural trade-off: higher security levels ($\lo
 support larger databases but require more feature-rich record structures. 
 The discrete allocation policy simplifies implementation while ensuring predictable performance. 
 The experimental matrix reveals that viable configurations cluster where template requirements align with cryptographic capacity, guiding practical parameter selection.
+
+\subsection{Multi-Channel Architecture}
+
+The packing strategy and feasibility constraints highlight an important observation: 
+no single homomorphic parameter set can efficiently support the full diversity of Cyber Threat Intelligence (CTI) record formats. 
+Compact records fit comfortably under smaller rings, while full JSON objects with long cryptographic hashes exceed the slot budget of these configurations. 
+To balance scalability and expressiveness, we design a \emph{multi-channel architecture} in Hyperledger Fabric, 
+where each channel is provisioned with a distinct BGV parameter set and record template.
+
+\paragraph{Channel Mini (LogN=13).}
+Supports compact CTI records (e.g., MD5, malware family, threat level) with maximum scalability and lowest query latency. 
+For example, with $N=8192$ slots, the system accommodates up to 128 records when $\max_i |d_i| \leq 64$ bytes, 
+and 16 records when $\max_i |d_i| \leq 512$ bytes.
+
+\paragraph{Channel Mid (LogN=14).}
+Targets medium-sized records that include MD5 and truncated SHA-256 fields alongside classification metadata. 
+With $N=16384$ slots, the system supports up to 256 records at $\leq 64$ bytes or 32 records at $\leq 512$ bytes.
+
+\paragraph{Channel Rich (LogN=15).}
+Handles the most detailed records, including full-length hashes and multiple metadata fields. 
+Here, $N=32768$ slots allow up to 512 records at $\leq 64$ bytes or 64 records at $\leq 512$ bytes.
+
+\paragraph{Channel semantics.}
+Each channel maintains its own plaintext polynomial database $m_{\mathrm{DB}}$ encoded according to Alg.~\ref{alg:ledger-init}. 
+Fabric’s world state thus contains both:
+\begin{enumerate}
+    \item The \emph{normal view}: JSON-formatted CTI records for auditability and integration with non-PIR chaincode.
+    \item The \emph{polynomial view}: $m_{\mathrm{DB}}$, used exclusively by the PIR chaincode for homomorphic evaluation.
+\end{enumerate}
+This dual representation ensures that endorsing peers can still serve conventional read requests 
+(e.g., \textsf{PublicQueryALL}) while PIR queries operate only over the encrypted polynomial interface.
+
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/diagrams/4_multi_channel_arc.png}
+    \caption{Multi-channel CPIR architecture. 
+    Each channel instantiates a separate CPIR chaincode and maintains its own $m_{\mathrm{DB}}$ polynomial, 
+    parameterized by $\log N$. This allows compact, mid-size, and rich CTI records to coexist under the same Fabric network.}
+    \label{fig:multi-channel}
+\end{figure*}
+
 
 
 \section{CONCLUSION}
@@ -513,7 +554,7 @@ here.
 \bibliography{bibliography}
 
 
-\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{a1.png}}]
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/author1.png}}]
 {FIRST A. AUTHOR}~(Fellow, IEEE)~and all authors may include biographies.
 Biographies are often not included in conference-related papers. This author
 is an IEEE Fellow. The first paragraph may contain a place and/or date of
