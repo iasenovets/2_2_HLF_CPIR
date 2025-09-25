@@ -1,8 +1,8 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"off-chain-pir-client/internal/cpir"
 	"off-chain-pir-client/internal/utils"
@@ -10,42 +10,55 @@ import (
 
 /********* main demo **********************************************/
 func main() {
-	// --- Set parameters --- Please follow the Feasible Parameters table in the README.md
-	const logN = 13          // set the HE parameter LogN: 13, 14, or 15
-	const dbSize = 128       // set the total number of records in the DB: 100, 256, or 512
-	const maxJSONlength = 64 // set the max JSON length: 64, 128, 224, 256, 384, or 512
-	const idx = 13           // set the index of the record to be retrieved: 0..dbSize-1
-	fmt.Printf("Demo with LogN=%d, dbSize=%d, maxJSONlength=%d, retrieving record idx=%d\n", logN, dbSize, maxJSONlength, idx)
+	const logN = 13
+	const dbSize = 64
+	const maxJSONlength = 128
+	const idx = 13
 
-	// HE keys
-	params, sk, pk, _ := cpir.GenKeys(logN)
+	fmt.Printf("Demo with LogN=%d, dbSize=%d, maxJSONlength=%d, retrieving record idx=%d\n",
+		logN, dbSize, maxJSONlength, idx)
 
-	// --- Init --- dbSize | maxJSONlength | logN
-	utils.Call("InitLedger", fmt.Sprintf("%d", dbSize), fmt.Sprintf("%d", maxJSONlength), fmt.Sprintf("%d", logN))
+	// 1) Init (any client)
+	utils.Call("InitLedger",
+		fmt.Sprintf("%d", dbSize),
+		fmt.Sprintf("%d", maxJSONlength),
+		fmt.Sprintf("%d", logN),
+	)
 
-	slotsStr, _ := utils.Call("GetSlotsPerRecord")
-	slotsPerRec, _ := strconv.Atoi(slotsStr)
-	fmt.Println("slotsPerRec =", slotsPerRec)
+	// 2) Discover metadata (single JSON)
+	metaStr, _ := utils.Call("GetMetadata")
+	var meta cpir.Metadata
+	if err := json.Unmarshal([]byte(metaStr), &meta); err != nil {
+		panic(fmt.Errorf("failed to parse metadata: %w", err))
+	}
 
-	// --- Public query
+	// Print each parameter (for debugging / parity checks)
+	fmt.Println("---- GetMetadata ----")
+	fmt.Printf("n         : %d\n", meta.NRecords)
+	fmt.Printf("record_s  : %d\n", meta.RecordS)
+	fmt.Printf("logN      : %d\n", meta.LogN)
+	fmt.Printf("N         : %d\n", meta.N)
+	fmt.Printf("t         : %d\n", meta.T)
+	fmt.Printf("logQi     : %v\n", meta.LogQi)
+	fmt.Printf("logPi     : %v\n", meta.LogPi)
+	fmt.Println("---------------------")
+
+	// 4) Generate keys from literal (matches server params)
+	params, sk, pk, err := cpir.GenKeysFromMetadata(meta)
+	if err != nil {
+		panic(fmt.Errorf("GenKeysFromLiteral failed: %w", err))
+	}
+	fmt.Printf("KeyGen done: skID=%p  pkID=%p\n", sk, pk)
+	// 5) Public read example (unchanged)
 	j, _ := utils.Call("PublicQueryCTI", "record000")
 	fmt.Println("record000 =", j)
 
-	totalStr, err := utils.Call("PublicQueryALL")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Total CTI records =", totalStr)
-	serverDbSize, err := strconv.Atoi(totalStr)
-	if err != nil {
-		panic(fmt.Errorf("PublicQueryALL returned non-number %q: %w", totalStr, err))
-	}
+	// 6) PIR query using discovered n,s
+	serverDbSize := meta.NRecords
+	slotsPerRec := meta.RecordS
 
-	fmt.Printf("CTI record count = %d\n", serverDbSize)
-
-	// --- PIR
-	encQueryB64, len_ct_bytes, _ := cpir.EncryptQueryBase64(params, pk, idx, serverDbSize, slotsPerRec)
-	fmt.Printf("len_ct_bytes=%d\n", len_ct_bytes)
+	encQueryB64, lenCtBytes, _ := cpir.EncryptQueryBase64(params, pk, idx, serverDbSize, slotsPerRec)
+	fmt.Printf("len_ct_bytes=%d\n", lenCtBytes)
 
 	encResB64, _ := utils.Call("PIRQuery", encQueryB64)
 	dec, _ := cpir.DecryptResult(params, sk, encResB64, idx, serverDbSize, slotsPerRec)

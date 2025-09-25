@@ -26,11 +26,15 @@ type request struct {
 
 /********* Ledger's World State ***********************/
 var (
-	mtx         sync.RWMutex
-	params      bgv.Parameters
-	ptdb        *rlwe.Plaintext
-	records     [][]byte
-	slotsPerRec int
+	mtx sync.RWMutex
+	// Cryptographic context
+	params bgv.Parameters  // in-memory BGV params
+	m_DB   *rlwe.Plaintext // in-memory plaintext poly
+
+	// Database meta
+	nRecords    int      // world state: "n"
+	slotsPerRec int      // world state: "record_s"
+	records     [][]byte // world state: "record%03d" keys
 )
 
 /********* ХЭНДЛЕР INVOKE ******************************************/
@@ -63,10 +67,40 @@ func invoke(w http.ResponseWriter, r *http.Request) {
 			utils.WriteErr(w, err)
 			return
 		}
-		utils.WriteOK(w, fmt.Sprintf("ledger initialized with %d records, LogN=%d, slotsPerRec=%d", n, logN, slotsPerRec))
+		utils.WriteOK(w, fmt.Sprintf(
+			"ledger initialized with %d records, LogN=%d, slotsPerRec=%d",
+			nRecords, params.LogN(), slotsPerRec,
+		))
 
-	case "GetSlotsPerRecord":
-		utils.WriteOK(w, fmt.Sprintf("%d", slotsPerRec))
+	case "GetMetadata":
+		mtx.RLock()
+		defer mtx.RUnlock()
+
+		// Construct richer metadata, identical to on-chain
+		meta := struct {
+			NRecords int    `json:"n"`
+			RecordS  int    `json:"record_s"`
+			LogN     int    `json:"logN"`
+			N        int    `json:"N"`
+			T        uint64 `json:"t"`
+			LogQi    []int  `json:"logQi"`
+			LogPi    []int  `json:"logPi"`
+		}{
+			NRecords: nRecords,
+			RecordS:  slotsPerRec,
+			LogN:     params.LogN(),
+			N:        params.N(),
+			T:        params.PlaintextModulus(),
+			LogQi:    params.LogQi(),
+			LogPi:    params.LogPi(),
+		}
+
+		out, err := json.Marshal(meta)
+		if err != nil {
+			utils.WriteErr(w, fmt.Errorf("failed to marshal metadata: %w", err))
+			return
+		}
+		utils.WriteOK(w, string(out))
 
 	case "PublicQueryCTI":
 		if len(req.Args) != 1 {
@@ -88,11 +122,6 @@ func invoke(w http.ResponseWriter, r *http.Request) {
 		}
 		utils.WriteOK(w, string(records[idx]))
 
-	case "PublicQueryALL":
-		mtx.RLock()
-		defer mtx.RUnlock()
-		utils.WriteOK(w, fmt.Sprintf("%d", len(records)))
-
 	case "PIRQuery":
 		if len(req.Args) != 1 {
 			utils.WriteErr(w, fmt.Errorf("need encQueryB64"))
@@ -110,7 +139,6 @@ func invoke(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-/********* БИЗНЕС-ЛОГИКА ******************************************/
 func initLedger(n int, maxJsonLength int, logN int) error {
 	mtx.Lock()
 	defer mtx.Unlock()
@@ -123,37 +151,21 @@ func initLedger(n int, maxJsonLength int, logN int) error {
 	params = p
 	log.Printf("[INFO] Initializing ledger with LogN=%d (Ring size = %d slots)", logN, params.MaxSlots())
 
-	// Determine channel based on logN
-	channel := fmt.Sprintf("channel_logN%d", logN)
-
 	// 2. Generate synthetic records
 	genRecords, err := gen_records.GenerateRecords(n, logN, maxJsonLength)
 	if err != nil {
 		return err
 	}
 	records = genRecords
-	log.Printf("[INFO] Generated %d records for channel=%s, maxJsonLength=%d", len(records), channel, maxJsonLength)
-
-	// Print sample record info
-	if len(records) > 0 {
-		log.Printf("[DEBUG] Sample record[0]: JSON length = %d bytes, content = %s",
-			len(records[0]), string(records[0]))
-	}
+	nRecords = len(records)
 
 	// 3. Calculate slots per record
 	slotsPerRec = utils.CalcSlotsPerRec(records)
-	log.Printf("[INFO] slotsPerRec auto-set = %d", slotsPerRec)
 
 	// 4. Validate ring capacity
-	requiredSlots := len(records) * slotsPerRec
-	availableSlots := params.MaxSlots()
-	log.Printf("[DEBUG] Ring size check: Required slots = %d (%d records * %d slots/rec), Available slots = %d",
-		requiredSlots, len(records), slotsPerRec, availableSlots)
-
-	if requiredSlots > availableSlots {
-		err := fmt.Errorf("DB too big for chosen ring. Required slots: %d, available: %d", requiredSlots, availableSlots)
-		log.Printf("[ERROR] %v", err)
-		return err
+	requiredSlots := nRecords * slotsPerRec
+	if requiredSlots > params.MaxSlots() {
+		return fmt.Errorf("DB too big for chosen ring. Required=%d, available=%d", requiredSlots, params.MaxSlots())
 	}
 
 	// 5. Pack records into plaintext vector
@@ -199,17 +211,18 @@ func initLedger(n int, maxJsonLength int, logN int) error {
 	log.Printf("[INFO] Empty slots = %d", emptySlots)
 	log.Printf("[INFO] Utilization (data/full) = %.2f%%", utilization)
 
-	// 6. Encode PTDB
+	// 6. Encode m_DB
 	enc := bgv.NewEncoder(params)
 	pt := bgv.NewPlaintext(params, params.MaxLevel())
 	if err := enc.Encode(packed, pt); err != nil {
 		return fmt.Errorf("failed to encode database: %w", err)
 	}
-	ptdb = pt
-	log.Println("[INFO] PTDB ready (encoded)")
+	m_DB = pt
 
-	// Optional: debug print for encoded polynomial representation
-	utils.DebugPrintRecords(params, records, slotsPerRec, ptdb)
+	// --- Debug metadata (parity with on-chain) ---
+	log.Printf("[META] n=%d, record_s=%d, LogN=%d, N=%d, T=%d, LogQi=%v, LogPi=%v",
+		nRecords, slotsPerRec, params.LogN(), params.N(), params.PlaintextModulus(), params.LogQi(), params.LogPi())
+
 	return nil
 }
 
@@ -219,14 +232,14 @@ func initLedger(n int, maxJsonLength int, logN int) error {
 //
 // Steps:
 // 1. Decode the Base64 query into ciphertext.
-// 2. Perform homomorphic element-wise multiplication with the packed PTDB.
+// 2. Perform homomorphic element-wise multiplication with the packed m_DB.
 // 3. Serialize the result back to Base64 for transmission to the client.
 
 func pirQuery(encQueryB64 string) (string, error) {
 	mtx.RLock()
 	defer mtx.RUnlock()
 
-	if ptdb == nil {
+	if m_DB == nil {
 		return "", fmt.Errorf("PIR database not initialized")
 	}
 
@@ -248,7 +261,7 @@ func pirQuery(encQueryB64 string) (string, error) {
 	eval := bgv.NewEvaluator(params, nil)
 
 	start := time.Now()
-	ctRes, err := eval.MulNew(ctQuery, ptdb)
+	ctRes, err := eval.MulNew(ctQuery, m_DB)
 	if err != nil {
 		return "", fmt.Errorf("PIR evaluation failed: %w", err)
 	}

@@ -36,9 +36,17 @@ type CTIRecordMini struct {
 /**************  CHAINCODE STRUCT **************************************/
 type PIRMiniChaincode struct {
 	contractapi.Contract
-	Params      bgv.Parameters
-	SlotsPerRec int
-	PTDB        *rlwe.Plaintext
+
+	// Cryptographic context
+	Params bgv.Parameters  // in-memory BGV params
+	m_DB   *rlwe.Plaintext // in-memory plaintext poly
+
+	// Metadata (mirror world state keys)
+	NRecords    int // world state: "n"
+	SlotsPerRec int // world state: "record_s"
+
+	// Optional cache of JSON records (not required for PIR path)
+	Records [][]byte // world state: "record%03d" keys
 }
 
 type AuditRecord struct {
@@ -51,8 +59,8 @@ type AuditRecord struct {
 	EncQueryLenB64 int    `json:"enc_query_len_b64"`
 	EncQueryHead   string `json:"enc_query_b64_head"` // first 48 chars for quick debug
 
-	// PTDB provenance (keep the hash—compact and verifiable)
-	PTDBSHA256  string `json:"ptdb_sha256"`
+	// m_DB provenance (keep the hash—compact and verifiable)
+	MDBSHA256   string `json:"m_DB_sha256"`
 	SlotsPerRec int    `json:"slots_per_rec,omitempty"`
 	DBSize      int    `json:"db_size,omitempty"`
 
@@ -71,7 +79,7 @@ type PublicReadAudit struct {
 }
 
 /**************  INIT LEDGER *******************************************/
-func (cc *PIRMiniChaincode) InitLedger(ctx contractapi.TransactionContextInterface, numRecordsStr string, maxJsonLengthStr string) error {
+func (cc *PIRMiniChaincode) InitLedger(ctx contractapi.TransactionContextInterface, numRecordsStr, maxJsonLengthStr string) error {
 	numRecords, err := strconv.Atoi(numRecordsStr)
 	if err != nil || numRecords <= 0 {
 		return fmt.Errorf("invalid number of records")
@@ -81,79 +89,96 @@ func (cc *PIRMiniChaincode) InitLedger(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("invalid JSON length")
 	}
 
-	// 1. Setup BGV Params for channel_mini
-	paramsLit := bgv.ParametersLiteral{
-		LogN:             13,        // channel_mini uses logN=13
-		LogQ:             []int{54}, // ciphertext modulus
-		LogP:             []int{54}, // special prime
-		PlaintextModulus: 65537,
-	}
+	// 1) BGV params (as before)
+	paramsLit := bgv.ParametersLiteral{LogN: 13, LogQ: []int{54}, LogP: []int{54}, PlaintextModulus: 65537}
 	p, err := bgv.NewParametersFromLiteral(paramsLit)
 	if err != nil {
 		return fmt.Errorf("failed to set params: %v", err)
 	}
 	cc.Params = p
-	dbg("[CC] Params: LogN=%d, MaxSlots=%d", p.LogN(), p.MaxSlots())
 
-	// 2. Generate synthetic CTI records
+	// 2) Records
 	records, err := generateMiniRecords(numRecords, maxJsonLength)
 	if err != nil {
 		return err
 	}
+	cc.Records = make([][]byte, len(records))
 
-	// 3. Store each record JSON in ledger
+	// 3) Store JSON records
 	for i, rec := range records {
 		js, _ := json.Marshal(rec)
-		key := fmt.Sprintf("record%03d", i)
-		if err := ctx.GetStub().PutState(key, js); err != nil {
+		cc.Records[i] = js
+		if err := ctx.GetStub().PutState(fmt.Sprintf("record%03d", i), js); err != nil {
 			return err
 		}
 	}
-	dbg("[CC] Stored %d CTI records in world state", len(records))
 
-	// 4. Compute SlotsPerRecord
+	// 4) Compute record_s
 	maxLen := 0
-	for _, rec := range records {
-		js, _ := json.Marshal(rec)
+	for _, js := range cc.Records {
 		if len(js) > maxLen {
 			maxLen = len(js)
 		}
 	}
 	cc.SlotsPerRec = ((maxLen + 7) / 8) * 8
-	dbg("[CC] Max JSON length=%d -> SlotsPerRec=%d", maxLen, cc.SlotsPerRec)
 
-	// 5. Pack all records into PTDB
+	// 5) Pack → m_DB
 	packed := make([]uint64, p.MaxSlots())
-	for i, rec := range records {
-		js, _ := json.Marshal(rec)
+	for i, js := range cc.Records {
 		start := i * cc.SlotsPerRec
 		for j := 0; j < len(js) && j < cc.SlotsPerRec; j++ {
 			packed[start+j] = uint64(js[j])
 		}
 	}
-
 	enc := bgv.NewEncoder(p)
 	pt := bgv.NewPlaintext(p, p.MaxLevel())
 	if err := enc.Encode(packed, pt); err != nil {
 		return fmt.Errorf("failed to encode DB: %v", err)
 	}
-	cc.PTDB = pt
+	cc.m_DB = pt
 
-	// 6. Save PTDB in ledger
+	// 6) Persist m_DB + metadata
 	ptBytes, _ := pt.MarshalBinary()
-	if err := ctx.GetStub().PutState("PTDB", ptBytes); err != nil {
-		return fmt.Errorf("failed to save PTDB: %v", err)
+	if err := ctx.GetStub().PutState("m_DB", ptBytes); err != nil {
+		return fmt.Errorf("failed to save m_DB: %v", err)
 	}
-	dbg("[CC] PTDB encoded and stored (bytes=%d)", len(ptBytes))
+	if err := ctx.GetStub().PutState("n", []byte(fmt.Sprintf("%d", numRecords))); err != nil {
+		return fmt.Errorf("failed to save n: %v", err)
+	}
+	if err := ctx.GetStub().PutState("record_s", []byte(fmt.Sprintf("%d", cc.SlotsPerRec))); err != nil {
+		return fmt.Errorf("failed to save record_s: %v", err)
+	}
+
+	// 7) Persist minimal BGV params (for GetMetadata / client validation)
+	paramsMeta := struct {
+		LogN  int    `json:"logN"`
+		N     int    `json:"N"`
+		LogQi []int  `json:"logQi"`
+		LogPi []int  `json:"logPi"`
+		T     uint64 `json:"t"`
+	}{
+		LogN:  p.LogN(),
+		N:     p.N(),
+		LogQi: p.LogQi(),
+		LogPi: p.LogPi(),
+		T:     uint64(p.LogT()),
+	}
+	pm, _ := json.Marshal(paramsMeta)
+	if err := ctx.GetStub().PutState("bgv_params", pm); err != nil {
+		return fmt.Errorf("failed to save bgv_params: %v", err)
+	}
+
+	// 8) Mirror to struct scalar fields
+	cc.NRecords = numRecords
 
 	return nil
 }
 
 /**************  PIR QUERY *********************************************/
 func (cc *PIRMiniChaincode) PIRQuery(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
-	// Reload PTDB if not in memory
-	if cc.PTDB == nil {
-		raw, err := ctx.GetStub().GetState("PTDB")
+	// Reload m_DB if not in memory
+	if cc.m_DB == nil {
+		raw, err := ctx.GetStub().GetState("m_DB")
 		if err != nil {
 			return "", err
 		}
@@ -161,8 +186,8 @@ func (cc *PIRMiniChaincode) PIRQuery(ctx contractapi.TransactionContextInterface
 		if err := pt.UnmarshalBinary(raw); err != nil {
 			return "", err
 		}
-		cc.PTDB = pt
-		dbg("[CC] PTDB reloaded in memory")
+		cc.m_DB = pt
+		dbg("[CC] m_DB reloaded in memory")
 	}
 
 	encBytes, err := base64.StdEncoding.DecodeString(encQueryB64)
@@ -176,7 +201,7 @@ func (cc *PIRMiniChaincode) PIRQuery(ctx contractapi.TransactionContextInterface
 	dbg("[CC] PIRQuery: received ciphertext (bytes=%d)", len(encBytes))
 
 	eval := bgv.NewEvaluator(cc.Params, nil)
-	ctRes, err := eval.MulNew(ctQuery, cc.PTDB)
+	ctRes, err := eval.MulNew(ctQuery, cc.m_DB)
 	if err != nil {
 		return "", err
 	}
@@ -187,9 +212,9 @@ func (cc *PIRMiniChaincode) PIRQuery(ctx contractapi.TransactionContextInterface
 }
 
 func (cc *PIRMiniChaincode) PIRQueryWithAudit(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
-	// 1) Ensure PTDB is loaded
-	if cc.PTDB == nil {
-		raw, err := ctx.GetStub().GetState("PTDB")
+	// 1) Ensure m_DB is loaded
+	if cc.m_DB == nil {
+		raw, err := ctx.GetStub().GetState("m_DB")
 		if err != nil {
 			return "", err
 		}
@@ -197,8 +222,8 @@ func (cc *PIRMiniChaincode) PIRQueryWithAudit(ctx contractapi.TransactionContext
 		if err := pt.UnmarshalBinary(raw); err != nil {
 			return "", err
 		}
-		cc.PTDB = pt
-		dbg("[CC] PTDB reloaded in memory")
+		cc.m_DB = pt
+		dbg("[CC] m_DB reloaded in memory")
 	}
 
 	// --- Optional size guard (tune to your needs) ---
@@ -221,7 +246,7 @@ func (cc *PIRMiniChaincode) PIRQueryWithAudit(ctx contractapi.TransactionContext
 
 	// 3) PIR evaluation (ct × pt)
 	eval := bgv.NewEvaluator(cc.Params, nil)
-	ctRes, err := eval.MulNew(ctQuery, cc.PTDB)
+	ctRes, err := eval.MulNew(ctQuery, cc.m_DB)
 	if err != nil {
 		return "", err
 	}
@@ -230,9 +255,9 @@ func (cc *PIRMiniChaincode) PIRQueryWithAudit(ctx contractapi.TransactionContext
 	dbg("[CC] PIRQueryWithAudit: returning result (bytes=%d)", len(outBytes))
 
 	// 4) Build audit record with full payload stored separately
-	//    - PTDB hash (compact provenance)
-	ptdbBytes, _ := cc.PTDB.MarshalBinary()
-	ph := sha256.Sum256(ptdbBytes)
+	//    - m_DB hash (compact provenance)
+	m_DBBytes, _ := cc.m_DB.MarshalBinary()
+	ph := sha256.Sum256(m_DBBytes)
 
 	//    - client identity
 	cidLib, _ := cid.New(ctx.GetStub())
@@ -256,7 +281,7 @@ func (cc *PIRMiniChaincode) PIRQueryWithAudit(ctx contractapi.TransactionContext
 		ClientID:       clientID,
 		EncQueryLenB64: len(encQueryB64),
 		EncQueryHead:   head,
-		PTDBSHA256:     hex.EncodeToString(ph[:]),
+		MDBSHA256:      hex.EncodeToString(ph[:]),
 		ResultLenB64:   len(outB64),
 	}
 	auditJSON, _ := json.Marshal(audit)
@@ -342,23 +367,65 @@ func (cc *PIRMiniChaincode) PublicQueryCTIWithAudit(ctx contractapi.TransactionC
 	return string(b), nil
 }
 
-func (cc *PIRMiniChaincode) PublicQueryALL(ctx contractapi.TransactionContextInterface) (int, error) {
-	it, err := ctx.GetStub().GetStateByRange("", "")
-	if err != nil {
-		return 0, err
+// GetMetadata returns {"numRecords": n, "slotsPerRec": s} as JSON.
+/**************  GET METADATA *******************************************/
+func (cc *PIRMiniChaincode) GetMetadata(ctx contractapi.TransactionContextInterface) (string, error) {
+	// --- 1) Load n ---
+	nBytes, err := ctx.GetStub().GetState("n")
+	if err != nil || nBytes == nil {
+		return "", fmt.Errorf("missing n in world state")
 	}
-	defer it.Close()
-	count := 0
-	for it.HasNext() {
-		it.Next()
-		count++
-	}
-	return count - 1, nil // exclude PTDB entry
-}
+	n, _ := strconv.Atoi(string(nBytes))
 
-/**************  GET SLOTS PER RECORD *********************************/
-func (cc *PIRMiniChaincode) GetSlotsPerRecord(ctx contractapi.TransactionContextInterface) (int, error) {
-	return cc.SlotsPerRec, nil
+	// --- 2) Load record_s ---
+	sBytes, err := ctx.GetStub().GetState("record_s")
+	if err != nil || sBytes == nil {
+		return "", fmt.Errorf("missing record_s in world state")
+	}
+	recordS, _ := strconv.Atoi(string(sBytes))
+
+	// --- 3) Load BGV params ---
+	paramsBytes, err := ctx.GetStub().GetState("bgv_params")
+	if err != nil || paramsBytes == nil {
+		return "", fmt.Errorf("missing bgv_params in world state")
+	}
+
+	// Unmarshal stored metadata
+	var paramsMeta struct {
+		LogN  int    `json:"logN"`
+		N     int    `json:"N"`
+		LogQi []int  `json:"logQi"`
+		LogPi []int  `json:"logPi"`
+		T     uint64 `json:"t"`
+	}
+	if err := json.Unmarshal(paramsBytes, &paramsMeta); err != nil {
+		return "", fmt.Errorf("failed to parse bgv_params: %v", err)
+	}
+
+	// --- 4) Merge into one metadata blob ---
+	meta := struct {
+		NRecords int    `json:"n"`
+		RecordS  int    `json:"record_s"`
+		LogN     int    `json:"logN"`
+		N        int    `json:"N"`
+		T        uint64 `json:"t"`
+		LogQi    []int  `json:"logQi"`
+		LogPi    []int  `json:"logPi"`
+	}{
+		NRecords: n,
+		RecordS:  recordS,
+		LogN:     paramsMeta.LogN,
+		N:        paramsMeta.N,
+		T:        paramsMeta.T,
+		LogQi:    paramsMeta.LogQi,
+		LogPi:    paramsMeta.LogPi,
+	}
+
+	out, err := json.Marshal(meta)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal metadata: %v", err)
+	}
+	return string(out), nil
 }
 
 /**************  RECORD GENERATOR **************************************/

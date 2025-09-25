@@ -15,6 +15,17 @@ import (
  ********************************************************************/
 var Debug = true
 
+// Metadata mirrors the server's GetMetadata response.
+type Metadata struct {
+	NRecords int    `json:"n"`
+	RecordS  int    `json:"record_s"`
+	LogN     int    `json:"logN"`
+	N        int    `json:"N"`
+	T        uint64 `json:"t"`
+	LogQi    []int  `json:"logQi"`
+	LogPi    []int  `json:"logPi"`
+}
+
 // ---------- 1. Key & Parameter helpers ----------
 
 // ParamsLiteral128 returns a minimal BGV parameter set that
@@ -27,23 +38,16 @@ var Debug = true
 //     but must be non-empty if you later add relinearisation)
 //   - PlaintextModulus: an NTT-friendly prime (T ≡ 1 mod 2·N)
 //     65537 is the textbook choice.
-func ParamsLiteral128(logN int) bgv.ParametersLiteral {
+//
+// GenKeysFromMetadata builds the ParametersLiteral from metadata, then generates keys.
+func GenKeysFromMetadata(meta Metadata) (bgv.Parameters, *rlwe.SecretKey, *rlwe.PublicKey, error) {
 	lit := bgv.ParametersLiteral{
-		LogN:             logN,      // 2^13 = 8192
-		LogQ:             []int{54}, // one 54-bit ciphertext prime (picked automatically)
-		LogP:             []int{54}, // one 54-bit special prime for keyswitch (future-proof)
-		PlaintextModulus: 65537,     // T
+		LogN:             meta.LogN,
+		LogQ:             meta.LogQi,
+		LogP:             meta.LogPi,
+		PlaintextModulus: meta.T,
 	}
-	if Debug {
-		fmt.Printf("[DBG] ParamsLiteral: N=%d | Qbits=%v | Pbits=%v | T=%d\n",
-			1<<lit.LogN, lit.LogQ, lit.LogP, lit.PlaintextModulus)
-	}
-	return lit
-}
-
-// GenKeys produces a fresh BGV keypair and returns (params, sk, pk).
-func GenKeys(logN int) (bgv.Parameters, *rlwe.SecretKey, *rlwe.PublicKey, error) {
-	params, err := bgv.NewParametersFromLiteral(ParamsLiteral128(logN))
+	params, err := bgv.NewParametersFromLiteral(lit)
 	if err != nil {
 		return params, nil, nil, err
 	}

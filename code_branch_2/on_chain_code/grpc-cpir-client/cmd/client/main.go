@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -33,6 +34,11 @@ var (
 	keyDir      string
 	tlsCertPath string
 )
+
+var meta struct {
+	NumRecords  int `json:"numRecords"`
+	SlotsPerRec int `json:"slotsPerRec"`
+}
 
 func init() {
 	home, err := os.UserHomeDir()
@@ -90,26 +96,26 @@ func main() {
 	network := gw.GetNetwork(channelName)
 	contract := network.GetContract(chaincodeName)
 
-	// 2) Init ledger (pick params that fit logN=13 capacity)
+	// 2) Client 1: Init ledger with sample data (pick params that fit logN=13 capacity)
 	fmt.Println("\n--> Submit Transaction: InitLedger")
 	_, err = contract.SubmitTransaction("InitLedger", "32", "224") // or "64","128"
 	fabgw.Must(err, "InitLedger failed")
 	fmt.Println("*** InitLedger committed")
 
-	// 3) Discover packing parameters
-	fmt.Println("\n--> Evaluate Transaction: GetSlotsPerRecord")
-	sBytes, err := contract.EvaluateTransaction("GetSlotsPerRecord")
-	fabgw.Must(err, "GetSlotsPerRecord failed")
-	var slotsPerRec int
-	fmt.Sscan(string(sBytes), &slotsPerRec)
-	fmt.Println("*** slotsPerRec =", slotsPerRec)
+	// 3) Client 2: Discovers metadata parameters
+	fmt.Println("\n--> Evaluate Transaction: GetMetadata")
 
-	fmt.Println("\n--> Evaluate Transaction: PublicQueryALL")
-	allRes, err := contract.EvaluateTransaction("PublicQueryALL")
-	fabgw.Must(err, "PublicQueryALL failed")
-	var dbSize int
-	fmt.Sscan(string(allRes), &dbSize)
-	fmt.Println("*** dbSize =", dbSize)
+	metaRaw, err := contract.EvaluateTransaction("GetMetadata")
+	fabgw.Must(err, "GetMetadata failed")
+
+	if err := json.Unmarshal(metaRaw, &meta); err != nil {
+		fabgw.Must(err, "failed to parse GetMetadata JSON")
+	}
+	dbSize := meta.NumRecords
+	slotsPerRec := meta.SlotsPerRec
+
+	fmt.Printf("*** dbSize = %d\n", dbSize)
+	fmt.Printf("*** slotsPerRec = %d\n", slotsPerRec)
 
 	// Optional sanity read
 	fmt.Println("\n--> Evaluate Transaction: PublicQueryCTI(record013)")
