@@ -11,9 +11,12 @@ import (
 /********* main demo **********************************************/
 func main() {
 	// --- Set parameters --- Please follow the Feasible Parameters table in the README.md
-	const logN = 13           // set the HE parameter LogN: 13, 14, or 15
 	const dbSize = 64         // set the total number of records in the DB: 100, 256, or 512 (necessary param)
 	const maxJSONlength = 128 // set the max JSON length: 64, 128, 224, 256, 384, or 512 (necessary param)
+	const logN = 13           // set the HE parameter LogN: 13, 14, or 15
+	const logQi = ""          // set the HE parameter logQi as JSON array, or "" to use default (optional param)
+	const logPi = ""          // set the HE parameter logPi as JSON array, or "" to use default (optional param)
+	const t = ""              // set the HE parameter plaintext modulus t, or 0 to use default (optional param)
 	const idx = 13            // set the index of the record to be retrieved: 0..dbSize-1 (necessary param)
 
 	fmt.Printf("Demo with LogN=%d, dbSize=%d, maxJSONlength=%d, retrieving record idx=%d\n",
@@ -23,7 +26,11 @@ func main() {
 	utils.Call("InitLedger",
 		fmt.Sprintf("%d", dbSize),
 		fmt.Sprintf("%d", maxJSONlength),
-		//fmt.Sprintf("%d", logN),
+		fmt.Sprintf("%d", logN),
+		logQi,
+		logPi,
+		t,
+		//
 	)
 
 	// 2) Client 2: Discovers metadata parameters  (single JSON)
@@ -52,8 +59,8 @@ func main() {
 	fmt.Printf("KeyGen done: skID=%p  pkID=%p\n", sk, pk)
 
 	// Sanity check: fetch a public record (no encryption)
-	j, _ := utils.Call("PublicQueryCTI", "record000")
-	fmt.Println("record000 =", j)
+	j, _ := utils.Call("PublicQuery", "record013")
+	fmt.Println("PublicQuery: record013 =", j)
 
 	// 4) Client 2: CPIR: Encrypt → Evaluate → Decrypt
 	serverDbSize := meta.NRecords

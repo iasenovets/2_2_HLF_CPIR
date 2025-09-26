@@ -102,54 +102,14 @@ func (ls *LedgerState) invoke(w http.ResponseWriter, r *http.Request) {
 		))
 
 	case "GetMetadata":
-		ls.mtx.RLock()
-		defer ls.mtx.RUnlock()
+		ls.getMetadata(w)
 
-		// Construct richer metadata, identical to on-chain
-		meta := struct {
-			NRecords int    `json:"n"`
-			RecordS  int    `json:"record_s"`
-			LogN     int    `json:"logN"`
-			N        int    `json:"N"`
-			T        uint64 `json:"t"`
-			LogQi    []int  `json:"logQi"`
-			LogPi    []int  `json:"logPi"`
-		}{
-			NRecords: ls.nRecords,
-			RecordS:  ls.slotsPerRec,
-			LogN:     ls.params.LogN(),
-			N:        ls.params.N(),
-			T:        ls.params.PlaintextModulus(),
-			LogQi:    ls.params.LogQi(),
-			LogPi:    ls.params.LogPi(),
-		}
-
-		out, err := json.Marshal(meta)
-		if err != nil {
-			utils.WriteErr(w, fmt.Errorf("failed to marshal metadata: %w", err))
-			return
-		}
-		utils.WriteOK(w, string(out))
-
-	case "PublicQueryCTI":
+	case "PublicQuery":
 		if len(req.Args) != 1 {
 			utils.WriteErr(w, fmt.Errorf("arg 0 = key (e.g., record000)"))
 			return
 		}
-		key := req.Args[0]
-		idx, err := strconv.Atoi(key[len(key)-3:])
-		if err != nil || idx < 0 {
-			utils.WriteErr(w, fmt.Errorf("invalid record index from key %s", key))
-			return
-		}
-
-		ls.mtx.RLock()
-		defer ls.mtx.RUnlock()
-		if idx >= len(ls.records) {
-			utils.WriteErr(w, fmt.Errorf("not found"))
-			return
-		}
-		utils.WriteOK(w, string(ls.records[idx]))
+		ls.publicQuery(w, req.Args[0])
 
 	case "PIRQuery":
 		if len(req.Args) != 1 {
@@ -281,6 +241,38 @@ func (ls *LedgerState) initLedger(n, maxJSON, logN int, logQi, logPi []int, t ui
 // 2. Perform homomorphic element-wise multiplication with the packed m_DB.
 // 3. Serialize the result back to Base64 for transmission to the client.
 
+// --- Methods moved out of invoke ----------------------------------
+
+func (ls *LedgerState) getMetadata(w http.ResponseWriter) {
+	ls.mtx.RLock()
+	defer ls.mtx.RUnlock()
+
+	meta := struct {
+		NRecords int    `json:"n"`
+		RecordS  int    `json:"record_s"`
+		LogN     int    `json:"logN"`
+		N        int    `json:"N"`
+		T        uint64 `json:"t"`
+		LogQi    []int  `json:"logQi"`
+		LogPi    []int  `json:"logPi"`
+	}{
+		NRecords: ls.nRecords,
+		RecordS:  ls.slotsPerRec,
+		LogN:     ls.params.LogN(),
+		N:        ls.params.N(),
+		T:        ls.params.PlaintextModulus(),
+		LogQi:    ls.params.LogQi(),
+		LogPi:    ls.params.LogPi(),
+	}
+
+	out, err := json.Marshal(meta)
+	if err != nil {
+		utils.WriteErr(w, fmt.Errorf("failed to marshal metadata: %w", err))
+		return
+	}
+	utils.WriteOK(w, string(out))
+}
+
 func (ls *LedgerState) pirQuery(encQueryB64 string) (string, error) {
 	ls.mtx.RLock()
 	defer ls.mtx.RUnlock()
@@ -327,6 +319,22 @@ func (ls *LedgerState) pirQuery(encQueryB64 string) (string, error) {
 	log.Printf("[EVAL] Result ciphertext size = %d bytes", len(outBytes))
 
 	return base64.StdEncoding.EncodeToString(outBytes), nil
+}
+
+func (ls *LedgerState) publicQuery(w http.ResponseWriter, key string) {
+	idx, err := strconv.Atoi(key[len(key)-3:])
+	if err != nil || idx < 0 {
+		utils.WriteErr(w, fmt.Errorf("invalid record index from key %q", key))
+		return
+	}
+
+	ls.mtx.RLock()
+	defer ls.mtx.RUnlock()
+	if idx >= len(ls.records) {
+		utils.WriteErr(w, fmt.Errorf("not found"))
+		return
+	}
+	utils.WriteOK(w, string(ls.records[idx]))
 }
 
 /********* MAIN ***************************************************/
