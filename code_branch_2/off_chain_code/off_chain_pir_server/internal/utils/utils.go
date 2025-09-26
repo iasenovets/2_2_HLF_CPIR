@@ -13,9 +13,116 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/bgv"
 )
 
+var Debug = true
+
 type response struct {
 	Response string `json:"response,omitempty"`
 	Error    string `json:"error,omitempty"`
+}
+
+// Metadata mirrors the server's GetMetadata response.
+type Metadata struct {
+	NRecords int    `json:"n"`
+	RecordS  int    `json:"record_s"`
+	LogN     int    `json:"logN"`
+	N        int    `json:"N"`
+	T        uint64 `json:"t"`
+	LogQi    []int  `json:"logQi"`
+	LogPi    []int  `json:"logPi"`
+}
+
+// BGVParamHint: optional inputs for building bgv.Parameters.
+// Any empty field falls back to a sensible default.
+type BGVParamHint struct {
+	LogN  int
+	LogQi []int
+	LogPi []int
+	T     uint64
+}
+
+// BuildParamsFromHint builds bgv.Parameters from the hint,
+// applying defaults where the hint omits values.
+func BuildParamsFromHint(h BGVParamHint) (bgv.Parameters, error) {
+	if h.LogN <= 0 {
+		return bgv.Parameters{}, fmt.Errorf("LogN must be set (>0) in BGVParamHint")
+	}
+	lit := bgv.ParametersLiteral{
+		LogN:             h.LogN,
+		PlaintextModulus: h.T,
+	}
+	if lit.PlaintextModulus == 0 {
+		lit.PlaintextModulus = 65537
+	}
+	if len(h.LogQi) > 0 {
+		lit.LogQ = h.LogQi
+	} else {
+		lit.LogQ = []int{54}
+	}
+	if len(h.LogPi) > 0 {
+		lit.LogP = h.LogPi
+	} else {
+		lit.LogP = []int{54}
+	}
+	return bgv.NewParametersFromLiteral(lit)
+}
+
+// BuildParamsFromMetadata convenience: converts Metadata -> BGVParamHint -> bgv.Parameters.
+func BuildParamsFromMetadata(m Metadata) (bgv.Parameters, error) {
+	h := BGVParamHint{
+		LogN:  m.LogN,
+		LogQi: m.LogQi,
+		LogPi: m.LogPi,
+		T:     m.T,
+	}
+	return BuildParamsFromHint(h)
+}
+
+// (Optional) legacy helper kept for compatibility.
+func ParamsLiteral128(logN int) (bgv.Parameters, error) {
+	return BuildParamsFromHint(BGVParamHint{LogN: logN})
+}
+
+// ChooseLogN selects the smallest feasible logN such that
+// n * slotsPerRec <= 2^logN. Returns error if no feasible logN found.
+func ChooseLogN(n int, slotsPerRec int) (int, error) {
+	if n <= 0 || slotsPerRec <= 0 {
+		return 0, fmt.Errorf("invalid inputs: n=%d, slotsPerRec=%d", n, slotsPerRec)
+	}
+	const (
+		MinLogN = 13
+		MaxLogN = 15
+	)
+
+	requiredSlots := n * slotsPerRec
+	for logN := MinLogN; logN <= MaxLogN; logN++ {
+		if requiredSlots <= (1 << logN) {
+			log.Printf("[INFO] ChooseLogN: requiredSlots=%d, selected logN=%d (N=%d)",
+				requiredSlots, logN, 1<<logN)
+			return logN, nil
+		}
+	}
+	return 0, fmt.Errorf("cannot fit DB: requiredSlots=%d exceeds max supported N=%d",
+		requiredSlots, 1<<MaxLogN)
+}
+
+// CalcSlotsPerRec calculates slots per record based on the actual records
+func CalcSlotsPerRec(records [][]byte) int {
+	max := 0
+	for _, recBytes := range records {
+		if len(recBytes) > max {
+			max = len(recBytes)
+		}
+	}
+	slotsPerRec := ((max + 7) / 8) * 8
+	if slotsPerRec == 0 {
+		slotsPerRec = 8
+	}
+
+	log.Printf("[DEBUG] Max actual JSON len = %d bytes", max)
+	log.Printf("[DEBUG] slotsPerRec calculated = %d  ( = %d × 8-byte blocks)",
+		slotsPerRec, slotsPerRec/8)
+
+	return slotsPerRec
 }
 
 /********* UTILS *************************************************/
@@ -38,26 +145,6 @@ func FakeHash(prefix string, i int, length int) string {
 		hexStr += hex.EncodeToString(h[:])
 	}
 	return hexStr[:length]
-}
-
-// CalcSlotsPerRec calculates slots per record based on the actual records
-func CalcSlotsPerRec(records [][]byte) int {
-	max := 0
-	for _, recBytes := range records {
-		if len(recBytes) > max {
-			max = len(recBytes)
-		}
-	}
-	slotsPerRec := ((max + 7) / 8) * 8
-	if slotsPerRec == 0 {
-		slotsPerRec = 8
-	}
-
-	log.Printf("[DEBUG] Max actual JSON len = %d bytes", max)
-	log.Printf("[DEBUG] slotsPerRec calculated = %d  ( = %d × 8-byte blocks)",
-		slotsPerRec, slotsPerRec/8)
-
-	return slotsPerRec
 }
 
 // DebugPrintRecords prints debug information about the plaintext database
@@ -126,18 +213,4 @@ func WriteErr(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	json.NewEncoder(w).Encode(response{Error: err.Error()})
-}
-
-/********* ИНИЦИАЛИЗАЦИЯ HE PARAMS *****************************************/
-func CreateParams(logN int) (bgv.Parameters, error) {
-	if logN < 13 || logN > 15 {
-		return bgv.Parameters{}, fmt.Errorf("LogN must be between 13 and 15")
-	}
-	paramsLit := bgv.ParametersLiteral{
-		LogN:             logN,
-		LogQ:             []int{54},
-		LogP:             []int{54},
-		PlaintextModulus: 65537,
-	}
-	return bgv.NewParametersFromLiteral(paramsLit)
 }

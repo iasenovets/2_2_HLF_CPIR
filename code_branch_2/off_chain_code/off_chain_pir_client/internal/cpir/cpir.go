@@ -60,7 +60,6 @@ func GenKeysFromMetadata(meta Metadata) (bgv.Parameters, *rlwe.SecretKey, *rlwe.
 			params.MaxLevel(), len(params.Q()))
 		fmt.Printf("       MaxSlots     : %d\n", params.MaxSlots())
 	}
-
 	return params, sk, pk, nil
 }
 

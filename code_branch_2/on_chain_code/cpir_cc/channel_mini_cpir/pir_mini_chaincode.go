@@ -121,6 +121,9 @@ func (cc *PIRMiniChaincode) InitLedger(ctx contractapi.TransactionContextInterfa
 		}
 	}
 	cc.SlotsPerRec = ((maxLen + 7) / 8) * 8
+	if cc.SlotsPerRec == 0 {
+		cc.SlotsPerRec = 8
+	}
 
 	// 5) Pack → m_DB
 	packed := make([]uint64, p.MaxSlots())

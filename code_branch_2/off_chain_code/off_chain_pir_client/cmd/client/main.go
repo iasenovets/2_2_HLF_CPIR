@@ -10,22 +10,23 @@ import (
 
 /********* main demo **********************************************/
 func main() {
-	const logN = 13
-	const dbSize = 64
-	const maxJSONlength = 128
-	const idx = 13
+	// --- Set parameters --- Please follow the Feasible Parameters table in the README.md
+	const logN = 13           // set the HE parameter LogN: 13, 14, or 15
+	const dbSize = 64         // set the total number of records in the DB: 100, 256, or 512 (necessary param)
+	const maxJSONlength = 128 // set the max JSON length: 64, 128, 224, 256, 384, or 512 (necessary param)
+	const idx = 13            // set the index of the record to be retrieved: 0..dbSize-1 (necessary param)
 
 	fmt.Printf("Demo with LogN=%d, dbSize=%d, maxJSONlength=%d, retrieving record idx=%d\n",
 		logN, dbSize, maxJSONlength, idx)
 
-	// 1) Init (any client)
+	// 1)  Client 1: Init ledger with sample data
 	utils.Call("InitLedger",
 		fmt.Sprintf("%d", dbSize),
 		fmt.Sprintf("%d", maxJSONlength),
-		fmt.Sprintf("%d", logN),
+		//fmt.Sprintf("%d", logN),
 	)
 
-	// 2) Discover metadata (single JSON)
+	// 2) Client 2: Discovers metadata parameters  (single JSON)
 	metaStr, _ := utils.Call("GetMetadata")
 	var meta cpir.Metadata
 	if err := json.Unmarshal([]byte(metaStr), &meta); err != nil {
@@ -43,17 +44,18 @@ func main() {
 	fmt.Printf("logPi     : %v\n", meta.LogPi)
 	fmt.Println("---------------------")
 
-	// 4) Generate keys from literal (matches server params)
+	// 3) Client 2: KeyGen using discovered metadata
 	params, sk, pk, err := cpir.GenKeysFromMetadata(meta)
 	if err != nil {
 		panic(fmt.Errorf("GenKeysFromLiteral failed: %w", err))
 	}
 	fmt.Printf("KeyGen done: skID=%p  pkID=%p\n", sk, pk)
-	// 5) Public read example (unchanged)
+
+	// Sanity check: fetch a public record (no encryption)
 	j, _ := utils.Call("PublicQueryCTI", "record000")
 	fmt.Println("record000 =", j)
 
-	// 6) PIR query using discovered n,s
+	// 4) Client 2: CPIR: Encrypt → Evaluate → Decrypt
 	serverDbSize := meta.NRecords
 	slotsPerRec := meta.RecordS
 
