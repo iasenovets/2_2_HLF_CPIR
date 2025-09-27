@@ -54,11 +54,11 @@
   ],
   "chaincodes": [
     {
-      "name": "channel_mini_cpir",
+      "name": "on_chain_pir",
       "version": "0.0.1",
       "lang": "golang",
       "channel": "channel-mini",
-      "directory": "./cpir_cc/channel_mini_cpir"
+      "directory": "./on_chain_pir_server/cmd/server"
     }
 
   ]

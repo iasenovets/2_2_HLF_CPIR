@@ -15,6 +15,16 @@ import (
  ********************************************************************/
 var Debug = true
 
+type Metadata struct {
+	NRecords int    `json:"n"`        // db size
+	RecordS  int    `json:"record_s"` // slots per record
+	LogN     int    `json:"logN"`
+	N        int    `json:"N"`
+	T        uint64 `json:"t"`
+	LogQi    []int  `json:"logQi"`
+	LogPi    []int  `json:"logPi"`
+}
+
 // ---------- 1. Key & Parameter helpers ----------
 
 // ParamsLiteral128 returns a minimal BGV parameter set that
@@ -27,6 +37,30 @@ var Debug = true
 //     but must be non-empty if you later add relinearisation)
 //   - PlaintextModulus: an NTT-friendly prime (T ≡ 1 mod 2·N)
 //     65537 is the textbook choice.
+func GenKeysFromMetadata(meta Metadata) (bgv.Parameters, *rlwe.SecretKey, *rlwe.PublicKey, error) {
+	lit := bgv.ParametersLiteral{
+		LogN:             meta.LogN,
+		LogQ:             meta.LogQi,
+		LogP:             meta.LogPi,
+		PlaintextModulus: meta.T,
+	}
+	params, err := bgv.NewParametersFromLiteral(lit)
+	if err != nil {
+		return params, nil, nil, err
+	}
+	kgen := bgv.NewKeyGenerator(params)
+	sk, pk := kgen.GenKeyPairNew()
+
+	if Debug {
+		fmt.Printf("[DBG] KeyGen done   : skID=%p  pkID=%p\n", sk, pk)
+		fmt.Printf("       MaxLevel     : %d  (|Q|=%d prime)\n",
+			params.MaxLevel(), len(params.Q()))
+		fmt.Printf("       MaxSlots     : %d\n", params.MaxSlots())
+	}
+	return params, sk, pk, nil
+}
+
+// legacy
 func ParamsLiteral128() bgv.ParametersLiteral {
 	lit := bgv.ParametersLiteral{
 		LogN:             13,        // 2^13 = 8192
@@ -41,7 +75,7 @@ func ParamsLiteral128() bgv.ParametersLiteral {
 	return lit
 }
 
-// GenKeys produces a fresh BGV keypair and returns (params, sk, pk).
+// legacy GenKeys produces a fresh BGV keypair and returns (params, sk, pk).
 func GenKeys() (bgv.Parameters, *rlwe.SecretKey, *rlwe.PublicKey, error) {
 	params, err := bgv.NewParametersFromLiteral(ParamsLiteral128())
 	if err != nil {

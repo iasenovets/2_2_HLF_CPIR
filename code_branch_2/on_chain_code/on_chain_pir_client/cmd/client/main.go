@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"grpc-cpir/internal/cpir"
-	"grpc-cpir/internal/fabgw"
+	"on-chain-pir-client/internal/cpir"
+	"on-chain-pir-client/internal/fabgw"
 
 	"github.com/hyperledger/fabric-gateway/pkg/client"
 	"github.com/hyperledger/fabric-gateway/pkg/hash"
@@ -34,11 +34,6 @@ var (
 	keyDir      string
 	tlsCertPath string
 )
-
-var meta struct {
-	NumRecords  int `json:"numRecords"`
-	SlotsPerRec int `json:"slotsPerRec"`
-}
 
 func init() {
 	home, err := os.UserHomeDir()
@@ -64,10 +59,6 @@ func main() {
 	log.Println("keyDir:", keyDir)
 	log.Println("tlsCertPath:", tlsCertPath)
 	log.Println("peerEndpoint:", peerEndpoint)
-
-	// 0) HE keys
-	params, sk, pk, err := cpir.GenKeys()
-	fabgw.Must(err, "HE keygen failed")
 
 	// 1) Fabric Gateway connection (TLS + identity + signer)
 	conn, err := fabgw.NewConnection(peerEndpoint, tlsCertPath, gatewayPeer)
@@ -96,60 +87,85 @@ func main() {
 	network := gw.GetNetwork(channelName)
 	contract := network.GetContract(chaincodeName)
 
-	// 2) Client 1: Init ledger with sample data (pick params that fit logN=13 capacity)
+	// --- Set parameters --- Please follow the Feasible Parameters table in the README.md
+	const dbSize = 64         // set the total number of records in the DB: 100, 256, or 512 (necessary param)
+	const maxJSONlength = 128 // set the max JSON length: 64, 128, 224, 256, 384, or 512 (necessary param)
+	const logN = 13           // set the HE parameter LogN: 13, 14, or 15
+	const logQi = ""          // set the HE parameter logQi as JSON array, or "" to use default (optional param)
+	const logPi = ""          // set the HE parameter logPi as JSON array, or "" to use default (optional param)
+	const t = ""              // set the HE parameter plaintext modulus t, or 0 to use default (optional param)
+	const targetIndex = 13    // set the index of the record to be retrieved: 0..dbSize-1 (necessary param)
+
+	// 1) Client 1: Init ledger with sample data (pick params that fit logN=13 capacity)
 	fmt.Println("\n--> Submit Transaction: InitLedger")
-	_, err = contract.SubmitTransaction("InitLedger", "32", "224") // or "64","128"
+	// pass: n, maxJSON, logN="", logQi="[]", logPi="[]", t=""
+	_, err = contract.SubmitTransaction("InitLedger",
+		fmt.Sprintf("%d", dbSize),
+		fmt.Sprintf("%d", maxJSONlength),
+		fmt.Sprintf("%d", logN),
+		logQi,
+		logPi,
+		t)
+	//_, err = contract.SubmitTransaction("InitLedger", "32", "224", "", "[]", "[]", "")
 	fabgw.Must(err, "InitLedger failed")
+
 	fmt.Println("*** InitLedger committed")
 
-	// 3) Client 2: Discovers metadata parameters
+	// 2) Client 2: Discovers metadata parameters
 	fmt.Println("\n--> Evaluate Transaction: GetMetadata")
-
 	metaRaw, err := contract.EvaluateTransaction("GetMetadata")
 	fabgw.Must(err, "GetMetadata failed")
 
+	var meta cpir.Metadata
 	if err := json.Unmarshal(metaRaw, &meta); err != nil {
 		fabgw.Must(err, "failed to parse GetMetadata JSON")
 	}
-	dbSize := meta.NumRecords
-	slotsPerRec := meta.SlotsPerRec
 
-	fmt.Printf("*** dbSize = %d\n", dbSize)
+	fmt.Printf("*** n=%d  s=%d  logN=%d  N=%d  t=%d  logQi=%v  logPi=%v\n",
+		meta.NRecords, meta.RecordS, meta.LogN, meta.N, meta.T, meta.LogQi, meta.LogPi)
+
+	// 3) Client 2: Build HE params/keys from server metadata (parity with off-chain)
+	params, sk, pk, err := cpir.GenKeysFromMetadata(meta)
+	fabgw.Must(err, "GenKeysFromMetadata failed")
+
+	serverDbSize := meta.NRecords
+	slotsPerRec := meta.RecordS
+
+	fmt.Printf("*** serverDbSize = %d\n", serverDbSize)
 	fmt.Printf("*** slotsPerRec = %d\n", slotsPerRec)
 
 	// Optional sanity read
-	fmt.Println("\n--> Evaluate Transaction: PublicQueryCTI(record013)")
-	qRes, err := contract.EvaluateTransaction("PublicQueryCTI", "record013")
-	fabgw.Must(err, "PublicQueryCTI failed")
+	fmt.Println("\n--> Evaluate Transaction: PublicQuery(record013)")
+	qRes, err := contract.EvaluateTransaction("PublicQuery", "record013")
+	fabgw.Must(err, "PublicQuery failed")
 	fmt.Println("*** record013 =", string(qRes))
 
-	fmt.Println("\n--> Evaluate Transaction: PublicQueryCTIWithAudit(record013)")
-	qResAudit, err := contract.SubmitTransaction("PublicQueryCTIWithAudit", "record013")
-	fabgw.Must(err, "PublicQueryCTI failed")
+	fmt.Println("\n--> Evaluate Transaction: PublicQuerySubmit(record013)")
+	qResAudit, err := contract.SubmitTransaction("PublicQuerySubmit", "record013")
+	fabgw.Must(err, "PublicQuery failed")
 	fmt.Println("*** record013 =", string(qResAudit))
 
-	// 4) CPIR: encrypt → evaluate → decrypt
-	const targetIndex = 13
+	// 4) Client 2: CPIR: encrypt → evaluate → decrypt
 	fmt.Println("\n--> Encrypting PIR query for index", targetIndex)
-	encQueryB64, _, err := cpir.EncryptQueryBase64(params, pk, targetIndex, dbSize, slotsPerRec)
+	encQueryB64, _, err := cpir.EncryptQueryBase64(params, pk, targetIndex, serverDbSize, slotsPerRec)
 	fabgw.Must(err, "EncryptQueryBase64 failed")
 
 	fmt.Println("\n--> Evaluate Transaction: PIRQuery")
 	encResB64Bytes, err := contract.EvaluateTransaction("PIRQuery", encQueryB64)
 	fabgw.Must(err, "PIRQuery failed")
 
-	// Audited read (committed audit record):
-	encResAudited, err := contract.SubmitTransaction("PIRQueryWithAudit", encQueryB64)
-	fabgw.Must(err, "PIRQuery failed")
+	fmt.Println("\n--> Submit Transaction: PIRQuerySubmit")
+	encResAudited, err := contract.SubmitTransaction("PIRQuerySubmit", encQueryB64)
+	fabgw.Must(err, "PIRQuerySubmit failed")
 
 	encResB64 := string(encResB64Bytes)
 	encResAuditedB64 := string(encResAudited)
-
 	fmt.Printf("*** Encrypted response (B64 len=%d)\n", len(encResB64))
-	fmt.Printf("*** Encrypted response audited (B64 len=%d)\n", len(encResAuditedB64))
+	fmt.Printf("*** Encrypted response (audited) (B64 len=%d)\n", len(encResAuditedB64))
 
 	fmt.Println("\n--> Decrypting PIR result")
-	decoded, err := cpir.DecryptResult(params, sk, encResB64, targetIndex, dbSize, slotsPerRec)
+	decoded, err := cpir.DecryptResult(params, sk, encResB64, targetIndex, serverDbSize, slotsPerRec)
 	fabgw.Must(err, "DecryptResult failed")
 	fmt.Println("*** PIR JSON =", decoded.JSONString)
+
 }

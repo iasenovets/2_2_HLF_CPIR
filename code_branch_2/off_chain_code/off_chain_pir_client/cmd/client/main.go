@@ -17,10 +17,10 @@ func main() {
 	const logQi = ""          // set the HE parameter logQi as JSON array, or "" to use default (optional param)
 	const logPi = ""          // set the HE parameter logPi as JSON array, or "" to use default (optional param)
 	const t = ""              // set the HE parameter plaintext modulus t, or 0 to use default (optional param)
-	const idx = 13            // set the index of the record to be retrieved: 0..dbSize-1 (necessary param)
+	const targetIndex = 13    // set the index of the record to be retrieved: 0..dbSize-1 (necessary param)
 
-	fmt.Printf("Demo with LogN=%d, dbSize=%d, maxJSONlength=%d, retrieving record idx=%d\n",
-		logN, dbSize, maxJSONlength, idx)
+	fmt.Printf("Demo with LogN=%d, dbSize=%d, maxJSONlength=%d, retrieving record targetIndex=%d\n",
+		logN, dbSize, maxJSONlength, targetIndex)
 
 	// 1)  Client 1: Init ledger with sample data
 	utils.Call("InitLedger",
@@ -66,10 +66,10 @@ func main() {
 	serverDbSize := meta.NRecords
 	slotsPerRec := meta.RecordS
 
-	encQueryB64, lenCtBytes, _ := cpir.EncryptQueryBase64(params, pk, idx, serverDbSize, slotsPerRec)
+	encQueryB64, lenCtBytes, _ := cpir.EncryptQueryBase64(params, pk, targetIndex, serverDbSize, slotsPerRec)
 	fmt.Printf("len_ct_bytes=%d\n", lenCtBytes)
 
 	encResB64, _ := utils.Call("PIRQuery", encQueryB64)
-	dec, _ := cpir.DecryptResult(params, sk, encResB64, idx, serverDbSize, slotsPerRec)
+	dec, _ := cpir.DecryptResult(params, sk, encResB64, targetIndex, serverDbSize, slotsPerRec)
 	fmt.Println("PIR result =", dec.JSONString)
 }

@@ -196,7 +196,7 @@ func (ls *LedgerState) initLedger(n, maxJSON, logN int, logQi, logPi []int, t ui
 		}
 	}
 
-	// Utilization summary (keep as requested)
+	// Utilization summary
 	filled := 0
 	for _, v := range packed {
 		if v != 0 {
@@ -273,6 +273,22 @@ func (ls *LedgerState) getMetadata(w http.ResponseWriter) {
 	utils.WriteOK(w, string(out))
 }
 
+func (ls *LedgerState) publicQuery(w http.ResponseWriter, key string) {
+	idx, err := strconv.Atoi(key[len(key)-3:])
+	if err != nil || idx < 0 {
+		utils.WriteErr(w, fmt.Errorf("invalid record index from key %q", key))
+		return
+	}
+
+	ls.mtx.RLock()
+	defer ls.mtx.RUnlock()
+	if idx >= len(ls.records) {
+		utils.WriteErr(w, fmt.Errorf("not found"))
+		return
+	}
+	utils.WriteOK(w, string(ls.records[idx]))
+}
+
 func (ls *LedgerState) pirQuery(encQueryB64 string) (string, error) {
 	ls.mtx.RLock()
 	defer ls.mtx.RUnlock()
@@ -319,22 +335,6 @@ func (ls *LedgerState) pirQuery(encQueryB64 string) (string, error) {
 	log.Printf("[EVAL] Result ciphertext size = %d bytes", len(outBytes))
 
 	return base64.StdEncoding.EncodeToString(outBytes), nil
-}
-
-func (ls *LedgerState) publicQuery(w http.ResponseWriter, key string) {
-	idx, err := strconv.Atoi(key[len(key)-3:])
-	if err != nil || idx < 0 {
-		utils.WriteErr(w, fmt.Errorf("invalid record index from key %q", key))
-		return
-	}
-
-	ls.mtx.RLock()
-	defer ls.mtx.RUnlock()
-	if idx >= len(ls.records) {
-		utils.WriteErr(w, fmt.Errorf("not found"))
-		return
-	}
-	utils.WriteOK(w, string(ls.records[idx]))
 }
 
 /********* MAIN ***************************************************/

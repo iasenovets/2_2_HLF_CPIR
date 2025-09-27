@@ -1,4 +1,4 @@
-module channel_mini
+module on-chain-pir-server
 
 go 1.24.1
 
