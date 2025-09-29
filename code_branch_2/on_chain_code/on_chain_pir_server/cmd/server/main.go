@@ -28,16 +28,8 @@ func dbg(format string, a ...interface{}) {
 	}
 }
 
-/**************  DATA MODEL ********************************************/
-type CTIRecordMini struct {
-	MD5           string `json:"md5"`
-	MalwareFamily string `json:"malware_family"`
-	ThreatLevel   string `json:"threat_level"`
-	Padding       string `json:"padding,omitempty"`
-}
-
 /**************  CHAINCODE STRUCT **************************************/
-type PIRMiniChaincode struct {
+type PIRChainCode struct {
 	contractapi.Contract
 
 	// Cryptographic context
@@ -82,7 +74,7 @@ type PublicReadAudit struct {
 }
 
 /**************  INIT LEDGER *******************************************/
-func (cc *PIRMiniChaincode) InitLedger(ctx contractapi.TransactionContextInterface,
+func (cc *PIRChainCode) InitLedger(ctx contractapi.TransactionContextInterface,
 	numRecordsStr, maxJsonLengthStr string, optArgs ...string) error {
 
 	n, err1 := strconv.Atoi(numRecordsStr)
@@ -218,7 +210,7 @@ func (cc *PIRMiniChaincode) InitLedger(ctx contractapi.TransactionContextInterfa
 }
 
 /**************  GET METADATA *******************************************/
-func (cc *PIRMiniChaincode) GetMetadata(ctx contractapi.TransactionContextInterface) (string, error) {
+func (cc *PIRChainCode) GetMetadata(ctx contractapi.TransactionContextInterface) (string, error) {
 	// --- Load n ---
 	nBytes, err := ctx.GetStub().GetState("n")
 	if err != nil || nBytes == nil {
@@ -276,7 +268,7 @@ func (cc *PIRMiniChaincode) GetMetadata(ctx contractapi.TransactionContextInterf
 }
 
 /**************  PUBLIC QUERY *******************************************/
-func (cc *PIRMiniChaincode) PublicQuery(ctx contractapi.TransactionContextInterface, key string) (string, error) {
+func (cc *PIRChainCode) PublicQuery(ctx contractapi.TransactionContextInterface, key string) (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("PublicQuery: key must not be empty")
 	}
@@ -294,7 +286,7 @@ func (cc *PIRMiniChaincode) PublicQuery(ctx contractapi.TransactionContextInterf
 	return string(b), nil
 }
 
-func (cc *PIRMiniChaincode) PublicQuerySubmit(ctx contractapi.TransactionContextInterface, key string) (string, error) {
+func (cc *PIRChainCode) PublicQuerySubmit(ctx contractapi.TransactionContextInterface, key string) (string, error) {
 	// Read the value exactly as in the evaluate path
 	b, err := ctx.GetStub().GetState(key)
 	if err != nil {
@@ -346,7 +338,7 @@ func (cc *PIRMiniChaincode) PublicQuerySubmit(ctx contractapi.TransactionContext
 
 /**************  PIR QUERY *********************************************/
 
-func (cc *PIRMiniChaincode) PIRQuery(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
+func (cc *PIRChainCode) PIRQuery(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
 	if encQueryB64 == "" {
 		return "", fmt.Errorf("PIRQuery: empty encQueryB64")
 	}
@@ -400,7 +392,7 @@ func (cc *PIRMiniChaincode) PIRQuery(ctx contractapi.TransactionContextInterface
 	return base64.StdEncoding.EncodeToString(outBytes), nil
 }
 
-func (cc *PIRMiniChaincode) PIRQuerySubmit(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
+func (cc *PIRChainCode) PIRQuerySubmit(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
 	// 1) Ensure m_DB is loaded
 	if cc.m_DB == nil {
 		raw, err := ctx.GetStub().GetState("m_DB")
@@ -492,7 +484,7 @@ func (cc *PIRMiniChaincode) PIRQuerySubmit(ctx contractapi.TransactionContextInt
 
 /**************  MAIN **************************************************/
 func main() {
-	cc, err := contractapi.NewChaincode(&PIRMiniChaincode{})
+	cc, err := contractapi.NewChaincode(&PIRChainCode{})
 	if err != nil {
 		panic(fmt.Sprintf("create cc: %v", err))
 	}

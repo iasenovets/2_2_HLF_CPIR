@@ -90,7 +90,7 @@ func main() {
 	// --- Set parameters --- Please follow the Feasible Parameters table in the README.md
 	const dbSize = 64         // set the total number of records in the DB: 100, 256, or 512 (necessary param)
 	const maxJSONlength = 128 // set the max JSON length: 64, 128, 224, 256, 384, or 512 (necessary param)
-	const logN = 13           // set the HE parameter LogN: 13, 14, or 15
+	const logN = ""           // set the HE parameter LogN: 13, 14, or 15
 	const logQi = ""          // set the HE parameter logQi as JSON array, or "" to use default (optional param)
 	const logPi = ""          // set the HE parameter logPi as JSON array, or "" to use default (optional param)
 	const t = ""              // set the HE parameter plaintext modulus t, or 0 to use default (optional param)

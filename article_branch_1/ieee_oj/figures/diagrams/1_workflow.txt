@@ -5,113 +5,185 @@ skinparam defaultTextAlignment left
 skinparam sequenceArrowThickness 1.5
 skinparam sequenceParticipantPadding 30
 skinparam sequenceMessageAlign left
+autonumber
 
 title CPIR-Enabled Private Retrieval Workflow in Hyperledger Fabric
 
-actor "Org A Client" as OrgA
-actor "Org B Client" as OrgB
-participant "Chaincode\n(PIR Interface)" as Chaincode
-database "Ledger (PTDB State)" as Ledger
- 
-== Ledger Initialization ==
-OrgA -> Chaincode : InitLedger(n, maxJsonLength, channel)
-activate Chaincode
-Chaincode -> Chaincode : createParams(logN <- channel)
-note right
-<math>N = 2^{logN}</math> (slots in ring)
-<math>LogN ∈ {13,14,15}</math>
-<math>LogQ = [54]</math>
-<math>T = 65537</math>
-end note
-Chaincode -> Chaincode : generateRecords(n, channel, maxJsonLength)
-note right
-Create synthetic JSON CTI records:
-Size ≤ maxJsonLength
-Examples:
-{ "md5": "...", "threat_level": "High" }
-end note
-Chaincode -> Chaincode : calcSlotsPerRec()
-note right
-<math>slotsPerRec = ceil({maxLen} / 8) × 8</math>
-e.g. maxLen = 217 → 224 slots
-end note
-Chaincode -> Chaincode : validateRingCapacity()
-note right
-<math>requiredSlots = dbsize_n × slotsPerRec</math>
-If:
-<math>requiredSlots > N -> reject </math>
-end note
-Chaincode -> Chaincode : packRecordsLoop()
-note right
-Place each byte in slot:
-<math>m_(DB)(X) = sum_(i=0)^(N-1) d_i X^i</math>
-<math>d_i ∈ [0,255]</math>
-end note
-Chaincode -> Chaincode : encodeIntoPolynomial(<math>m_D_B</math>)
-Chaincode -> Ledger : stub.PutState("PTDB", encoded DB)
-deactivate Chaincode
+actor "Data Writer (DW)" as OrgA
+actor "Data Requester (DR)" as OrgB
+participant "Gateway (GW)" as CC
+database "World State (WS)" as WS
 
-== Metadata Discovery ==
-OrgB -> Chaincode : publicQueryALL()
-activate Chaincode
-Chaincode -> Ledger : stub.GetState("PTDB")
-Chaincode --> OrgB : totalRecords = n
-deactivate Chaincode
+== Ledger Initialization (submit) ==
+OrgA -> CC : Submit InitLedger(n, maxJSON,\nlogN?, logQi?, logPi?, t?)
+activate CC
 
-OrgB -> Chaincode : getSlotsPerRecord()
-activate Chaincode
-Chaincode -> Ledger : stub.GetState("slotsPerRecord")
-Chaincode --> OrgB : slotsPerRecord = s
-deactivate Chaincode
+CC -> CC : parseArgs()
+note right
+<math>n > 0</math>, <math>maxJSON > 0</math> \\
+Optional: <math>logN, logQi, log"Pi", t</math>
+end note
+
+CC -> CC : s_guess := 8 · ceil(maxJSON / 8)
+note right
+Slot policy <math>S = 8·N</math> \\
+Lower bound <math>"record"_s ≥ s_"guess"</math>
+end note
+
+alt logN missing
+  CC -> CC : logN := ChooseLogN(n, s_guess)
+  note right
+  Feasibility: pick smallest <math>logN</math> s.t. \\
+  <math>N = 2^{logN}, n·"record"_s ≤ N</math>
+  end note
+else logN provided
+  CC -> CC : validate logN, logQi, logPi, t
+end
+
+CC -> CC : params := BuildParamsFromHint(logN, logQi, logPi, t)
+note right
+BGV params: <math>(N = 2^{logN}, q, t)</math> \\
+Store literal <math>{logN, N, logQi, log"Pi", t}</math>
+end note
+
+CC -> CC : records := GenerateRecords(n, logN, maxJSON)
+note right
+Synthesize CTI JSON with \\
+<math>|"record"_i| ≤ maxJSON</math> bytes
+end note
+
+loop i = 0..n-1
+  CC -> WS : PutState("record%03d", record_i)
+end
+
+CC -> CC : record_s := CalcSlotsPerRec(records)
+note right
+<math>"record"_s = 8 · ceil("max"_i |"record"_i| / 8)</math>
+end note
+
+CC -> CC : checkCapacity()
+note right
+Reject if <math>n · "record"_s > N</math>
+end note
+
+CC -> CC : packBytesToVector c[0..N-1]
+note right
+Disjoint windows in <math>c = (c_0,…,c_{N-1})</math> \\
+Record i → slots <math>{i·"record"_s,…,(i+1)·"record"_s-1}</math>
+end note
+
+CC -> CC : m_DB := Encode(c) at MaxLevel
+note right
+<math>m_DB(X) = ∑_{j=0}^{N-1} c_j X^j ∈ Z_t[X]/(X^N+1)</math>
+end note
+
+CC -> WS : PutState("m_DB", marshal(m_DB)) 
+CC -> WS : PutState("n", n)
+CC -> WS : PutState("record_s", record_s)
+CC -> WS : PutState("bgv_params",{logN, N, logQi, logPi, t})
+
+== Metadata Discovery (evaluate) ==
+OrgB -> CC : Evaluate GetMetadata()
+activate CC
+
+CC -> WS : GetState("n")
+note right
+Load <math>n</math>: number of records
+end note
+
+CC -> WS : GetState("record_s")
+note right
+Load <math>"record"_s</math>: slots per record window
+end note
+
+CC -> WS : GetState("bgv_params")
+note right
+Load BGV parameters: \\
+<math>\{logN, N, logQi, log"Pi", t\}</math>
+end note
+
+CC -> CC : Construct JSON blob
+note right
+<math>"metadata" = (n, "record"_s, logN, N, t, logQi[], log"Pi"[])</math>
+end note
+
+CC --> OrgB : metadata JSON
+deactivate CC
 
 == Private Information Retrieval ==
 group Client-Side Preparation
-    OrgB -> OrgB : makeSelectionVector() 
-note right
-<math> v={(1 if j∈{i⋅s,i⋅s+1,…,i⋅s+s-1}), (otherwise (0)):}</math>
-endnote
-    OrgB -> OrgB : encodeVectorToPolynomial()
-note right
-<math> m_q (X)=v_0 +v_1 X+v_2 X^2+⋯+v_(N-1) X^(N-1)</math>
-endnote
-    OrgB -> OrgB : encryptPolynomial()
-note right
-<math> ct_q = Enc_(pk) (m_q)∈R_q^2</math>
-endnote
-    OrgB -> OrgB : marshalBinary() → ctBytes[]
-    OrgB -> OrgB : b64Encode() → encQueryB64
+  OrgB -> OrgB : makeSelectionVector(i, n, record_s, N)
+  note right
+  Window <math>{i·"record"_s,…,(i+1)·"record"_s-1}</math> \\
+  Build <math>v ∈ {0,1}^N</math> with ones on the window.
+  end note
+
+  OrgB -> OrgB : encodeVectorToPolynomial()
+  note right
+  <math>m_q(X) = ∑_{j=0}^{N-1} v_j X^j</math>
+  end note
+
+  OrgB -> OrgB : encryptPolynomial(pk)
+  note right
+  <math>ct_q = Enc_{pk}(m_q)</math>
+  end note
+
+  OrgB -> OrgB : marshalBinary → ctBytes[]
+  OrgB -> OrgB : b64Encode → encQueryB64
 end
 
-OrgB -> Chaincode : PIRQuery(encQueryB64)
-activate Chaincode
-Chaincode -> Chaincode : b64Decode() → ctBytes[]
-Chaincode -> Chaincode : unmarshalBinary() → <math>ct_q</math>
-Chaincode -> Ledger : stub.GetState("PTDB")
-Chaincode -> Chaincode : homomorphicEval() 
+OrgB -> CC : Evaluate PIRQuery(encQueryB64)
+activate CC
+
+CC -> CC : validate non-empty(encQueryB64)
+
+alt lazy-load m_DB
+  CC -> WS : GetState("m_DB")
+  CC -> CC : unmarshal m_DB → plaintext at MaxLevel
+  note right
+  <math>m_(DB) ∈ Z_t[X]/(X^N+1)</math>
+  end note
+end
+
+CC -> CC : base64 decode → ctBytes[]
+CC -> CC : unmarshalBinary → ct_q
 note right
-<math> ct_r=Eval(ct_q⋅m_D_B)=Enc(v⋅m_D_B)</math>
-endnote
-Chaincode -> Chaincode : marshalBinary() → ctResultBytes[]
-Chaincode -> Chaincode : b64Encode() → encResultB64
-Chaincode --> OrgB : encResultB64
-deactivate Chaincode
+<math>ct_q</math> has degree 1, level = MaxLevel
+end note
+
+CC -> CC : homomorphicEval
+note right
+Evaluator mul: <math>ct_r = ct_q ⊗ m_(DB)</math> \\
+Semantic: <math>ct_r = Enc(v · m_(DB))</math>
+end note
+
+CC -> CC : marshalBinary → ctResultBytes[]
+CC -> CC : b64Encode → encResultB64
+CC --> OrgB : encResultB64
+deactivate CC
 
 == Local Decryption and Reconstruction ==
 group Client-Side Post-Processing
-    OrgB -> OrgB : b64Decode() → ctResultBytes[]
-    OrgB -> OrgB : unmarshalBinary() → <math>ct_r</math>
-    OrgB -> OrgB : decryptCt()
-note right
-<math> m'(X)=Dec_(sk) (ct_r )∈R_T</math>
-endnote
-    OrgB -> OrgB : determineSlotInterval()
-note right
-<math>j∈[i⋅s,(i+1)⋅s-1)</math>
-endnote
-    OrgB -> OrgB : collectNonZeroBytes()
-note right
-<math> u=(m'_(i⋅s) ,m'_(i⋅s+1) ,…,m'_((i+1)⋅s-1) )</math>
-endnote
-    OrgB -> OrgB : Decode bytes → JSON object
+  OrgB -> OrgB : b64Decode(encResultB64) → ctResultBytes[]
+  OrgB -> OrgB : unmarshalBinary() → ct_r
+  OrgB -> OrgB : decryptCt(sk)
+  note right
+  <math>m'(X) = Dec_{sk}(ct_r)</math> \\
+  Decode slots → vector <math>(m'_0,…,m'_{N-1})</math>
+  end note
+
+  OrgB -> OrgB : extractWindow(i, record_s)
+  note right
+  Index set <math>J = {i·"record"_s,…,(i+1)·"record"_s-1}</math> \\
+  Collect bytes <math>u = (m'_j)_{j∈J}</math>, stop at padding 0
+  end note
+
+  OrgB -> OrgB : decodeUTF8(u)
+  note right
+  Parse JSON string <math>buf</math> \\
+  Validate <math>json.Valid(buf) = true</math>
+  end note
+
+  OrgB -> OrgB : return Decoded {JSONString or IntValue}
 end
 @enduml

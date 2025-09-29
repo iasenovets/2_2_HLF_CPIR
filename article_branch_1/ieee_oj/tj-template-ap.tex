@@ -74,8 +74,8 @@ Crucially, these peers still observe all function arguments and read-sets.
 Thus, in multi-organization settings, the dominant privacy risk arises not from the immutable ledger, but from endorsing peers who can log or infer sensitive query information.
 
 Private Information Retrieval (PIR)~\cite{ref16_Chor1998Private} addresses this challenge by enabling a client to retrieve an item from a database without revealing which item was requested. 
-For a database $D = \{d_0,\dots,d_{n-1}\}$, the client forms a one-hot selection vector $v_i$ with a single ``1'' at index $i$. 
-By encrypting $v_i$ into $c_q = \text{Enc}_{pk}(v_i)$ and sending it to the server, the server computes an encrypted response 
+For a database $D = \{d_0,\dots,d_{n-1}\}$, the client forms a one-hot selection vector $\hat{v}_i$ with a single ``1'' at index $i$. 
+By encrypting $\hat{v}_i$ into $c_q = \text{Enc}_{pk}(\hat{v}_i)$ and sending it to the server, the server computes an encrypted response 
 $c_r = c_q \cdot D = \text{Enc}_{pk}(d_i)$, 
 which decrypts to $d_i$ under the client’s secret key. 
 This construction hides the queried index from the server. 
@@ -163,9 +163,9 @@ They fall into two categories:
 A client queries subsets of servers such that no single server learns the selection index.
 
 \emph{Computational PIR (CPIR).} Achieves privacy with a single server, relying on hardness assumptions and homomorphic encryption. 
-For a database $D=\{d_0,\dots,d_{n-1}\}$ and a one-hot selection vector $v_i$, the client computes 
+For a database $D=\{d_0,\dots,d_{n-1}\}$ and a one-hot selection vector $\hat{v}_i$, the client computes 
 \[
-c_q = \text{Enc}_{pk}(v_i), \qquad c_r = c_q \cdot D = \text{Enc}_{pk}(d_i).
+c_q = \text{Enc}_{pk}(\hat{v}_i), \qquad c_r = c_q \cdot D = \text{Enc}_{pk}(d_i).
 \]
 The server returns $c_r$, which the client decrypts as $d_i = \text{Dec}_{sk}(c_r)$. 
 Thus the queried index $i$ remains hidden from the server.
@@ -176,66 +176,80 @@ CPIR avoids the need for multiple servers, making it attractive in blockchain se
 \emph{c) BGV Homomorphic Encryption:}
 Our construction relies on the Brakerski–Gentry–Vaikuntanathan (BGV) scheme, a lattice-based homomorphic encryption system supporting both addition and multiplication over ciphertexts. 
 BGV is defined over polynomial rings modulo a large ciphertext modulus and enables \emph{batching}, where multiple plaintext elements are packed into a single ciphertext. 
-This capability allows efficient evaluation of structured queries and underpins the polynomial database representation used in our Fabric integration.
+In our design, this batching is used to embed the ledger’s key–value table into a single polynomial $m_{\mathrm{DB}}$, allowing efficient evaluation of structured PIR queries inside chaincode and underpins the polynomial database representation used in our Fabric integration.
 
 \subsection{Notation}
-We summarize the main notation used throughout the paper in Table~\ref{tab:notation}. Scalars are lower-case ($a$), vectors are bold ($\mathbf{x}$), sets are calligraphic ($\mathcal{S}$), algorithms are sans-serif ($\mathsf{Alg}$), and ciphertexts are prefixed by $ct$.
+We summarize the main notation used throughout the paper in Table~\ref{tab:notation}.
 
 \noindent\textit{Remark.} We write $ct_r = ct_q \cdot m_{\mathrm{DB}}$ to denote BGV ciphertext–plaintext multiplication with batching; concretely, this realizes
 \[
-\mathsf{Enc}_{pk}(v_i)\ \cdot\ m_{\mathrm{DB}}\ =\ \mathsf{Enc}_{pk}(d_i).
+\mathsf{Enc}_{pk}(\hat{v}_i)\ \cdot\ m_{\mathrm{DB}}\ =\ \mathsf{Enc}_{pk}(d_i).
 \]
 
-\subsection{Design Goals}
-Our design is guided by the following goals:
-\begin{itemize}
-    \item \textbf{Query privacy.} Endorsing peers executing chaincode must not learn which record is being queried. 
-    \item \textbf{Auditability.} Fabric’s endorsement and logging workflow should remain intact, ensuring that writes remain transparent and accountable.
-    \item \textbf{Practicality.} Encryption, evaluation, and decryption latencies must remain within practical limits for deployment in consortium networks.
-    \item \textbf{Compatibility.} The protocol must run as standard Fabric chaincode without requiring protocol extensions or specialized hardware.
-\end{itemize}
-
 \begin{table}[!t]
-\caption{Notation}
-\label{tab:notation}
-\setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.1}
-    \begin{tabular}{|p{78pt}|p{170pt}|}
-    \hline
-    \textbf{Symbol} & \textbf{Description} \\
-    \hline
-    $\lambda$ & Security parameter \\
-    $n$ & Database size; index domain $[n]=\{0,\dots,n-1\}$ \\
-    $D=\{d_0,\dots,d_{n-1}\}$ & Database records (serialized bytes/words) \\
-    $m_{\mathrm{DB}}$ & Plaintext polynomial representation of $D$ (BGV batching) \\
-    $v_i$ & One-hot selection vector for index $i$ \\
-    $pk,\, sk$ & Public / secret keys (BGV) \\
-    $ct_q=\mathsf{Enc}_{pk}(v_i)$ & Encrypted query (ciphertext) \\
-    $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response; $ct_r=\mathsf{Enc}_{pk}(d_i)$ \\
-    $d_i=\mathsf{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
-    $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$ & Key generation \\
-    $\mathsf{Enc}_{pk}(\cdot)$, $\mathsf{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
-    $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (ct–pt multiply) \\
-    $N$ & Ring dimension ($N=2^{\log N}$) (BGV) \\
-    $q$ & Ciphertext modulus (BGV) \\
-    $t$ & Plaintext modulus (BGV) \\
-    $record_s$ & Slots allocated per record (slot window size) \\
-    $record_b$ & Base serialized size of a record in bytes \\
-    $record_{\mu,\log N}$ & Template-specific minimum record size at security level $\log N$ \\
-    $\mathcal{S}$ & Allowed discrete slot sizes (implementation policy) \\
-    $\mathbf{c}=(c_0,\dots,c_{N-1})$ & Coefficient vector of the polynomial encoding (slots of $m_{\mathrm{DB}}$) \\
-    $|\cdot|$, $\mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
-    $\mathcal{C},\,\mathcal{E},\,\mathcal{O},\,\mathcal{P}$ & Client; endorsing peers; orderer; committing peers \\
-    \textsf{evaluate}, \textsf{submit} & Fabric read / write transaction phases \\
-    $\mathcal{L}$ & Leakage considered (ciphertext size, timing; defined later) \\
-    \hline
-    \end{tabular}
-\end{table}
-
+    \caption{Notation}
+    \label{tab:notation}
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.1}
+        \begin{tabular}{|p{78pt}|p{170pt}|}
+        \hline
+        \textbf{Symbol} & \textbf{Description} \\
+        \hline
+        $\lambda$ & Security parameter \\
+        \hline
+        $n$ & Database size; index domain $[n]=\{0,\dots,n-1\}$ \\
+        \hline
+        $D=\{d_0,\dots,d_{n-1}\}$ & Database records (serialized bytes/words) \\
+        \hline
+        $m_{\mathrm{DB}}$ & Plaintext polynomial representation of $D$ (BGV batching) \\
+        \hline
+        $\hat{v}_i$ & One-hot selection vector for index $i$ (1 in one slot, 0 elsewhere) \\
+        \hline
+        $v_i$ & Windowed selector for index $i$ with $record_s$ contiguous ones (retrieves full record window) \\
+        \hline
+        $pk,\, sk$ & Public / secret keys (BGV) \\
+        \hline
+        $ct_q=\mathsf{Enc}_{pk}(v_i)$ & Encrypted query (ciphertext) \\
+        \hline
+        $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response; $ct_r=\mathsf{Enc}_{pk}(d_i)$ \\
+        \hline
+        $d_i=\mathsf{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
+        \hline
+        $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$ & Key generation \\
+        \hline
+        $\mathsf{Enc}_{pk}(\cdot)$, $\mathsf{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
+        \hline
+        $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (ct–pt multiply) \\
+        \hline
+        $N$ & Ring dimension ($N=2^{\log N}$) (BGV) \\
+        \hline
+        $q$ & Ciphertext modulus (BGV) \\
+        \hline
+        $t$ & Plaintext modulus (BGV) \\
+        \hline
+        $record_s$ & Slots allocated per record (slot window size) \\
+        \hline
+        $record_b$ & Base serialized size of a record in bytes \\
+        \hline
+        $record_{\mu,\log N}$ & Template-specific minimum record size at security level $\log N$ \\
+        \hline
+        $\mathcal{S}$ & Allowed discrete slot sizes (implementation policy) \\
+        \hline
+        ${c}=(c_0,\dots,c_{N-1})$ & Coefficient vector of the polynomial encoding (slots of $m_{\mathrm{DB}}$) \\
+        \hline
+        $|\cdot|$, $\mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
+        \hline
+        $\mathcal{DO},\,\mathcal{DW},\,\mathcal{DR},\,\mathcal{GW}$ & Data Owner; Data Writer; Data Requester; Gateway \\
+        \hline
+        \textsf{evaluate}, \textsf{submit} & Fabric read / write transaction phases \\
+        \hline
+        $\mathcal{L}$ & Leakage considered (ciphertext size, protocol timing) \\
+        \hline
+        \end{tabular}
+    \end{table}
 
 \subsection{Cryptographic Primitives}
-
-We instantiate Computational Private Information Retrieval (CPIR) as a tuple of probabilistic polynomial-time algorithms
+CPIR can be instantiated as a tuple of probabilistic polynomial-time algorithms:
 \[
 \Pi = (\mathsf{KeyGen}, \mathsf{Enc}, \mathsf{Eval}, \mathsf{Dec}),
 \]
@@ -243,81 +257,50 @@ defined as follows:
 
 \begin{itemize}
     \item $\mathsf{KeyGen}(\lambda) \rightarrow (pk, sk)$: On input the security parameter $\lambda$, output a public key $pk$ and a secret key $sk$.
-    \item $\mathsf{Enc}_{pk}(v_i) \rightarrow ct_q$: Given a one-hot selection vector $v_i \in \{0,1\}^n$, produce an encrypted query ciphertext $ct_q$ under $pk$.
+    \item $\mathsf{Enc}_{pk}(\hat{v}_i) \rightarrow ct_q$: Given a one-hot selection vector $\hat{v}_i \in \{0,1\}^n$, produce an encrypted query ciphertext $ct_q$ under $pk$.
     \item $\mathsf{Eval}(ct_q, m_{\mathrm{DB}}) \rightarrow ct_r$: Given an encrypted query $ct_q$ and the plaintext database polynomial $m_{\mathrm{DB}}$, homomorphically evaluate the product to obtain an encrypted response $ct_r$.
     \item $\mathsf{Dec}_{sk}(ct_r) \rightarrow d_i$: Using the secret key $sk$, decrypt the response ciphertext $ct_r$ to recover the desired record $d_i$.
 \end{itemize}
 
-\noindent Correctness requires that for all $i \in [n]$,
+\noindent \textbf{Protocol objective.} 
+Correctness requires that for all $i \in [n]$,
 \[
-\mathsf{Dec}_{sk}\!\left(\mathsf{Eval}\!\left(\mathsf{Enc}_{pk}(v_i), m_{\mathrm{DB}}\right)\right) = d_i.
+\mathsf{Dec}_{sk}\!\left(\mathsf{Eval}\!\left(\mathsf{Enc}_{pk}(\hat{v}_i), m_{\mathrm{DB}}\right)\right) = d_i.
 \]
-
-\paragraph{Instantiation with BGV.} 
-We employ the Brakerski–Gentry–Vaikuntanathan (BGV) lattice-based homomorphic encryption scheme to realize $\Pi$. 
-BGV supports addition and multiplication on encrypted vectors and enables \emph{batching}, where multiple plaintext slots are packed into one ciphertext. 
-In our design, this batching is used to embed the ledger’s key–value table into a single polynomial $m_{\mathrm{DB}}$, allowing efficient evaluation of PIR queries inside chaincode.
 
 \section{Proposed System}
 
 \subsection{System Model}
-In this article, we introduce a blockchain-based query privacy system designed for permissioned ledgers. 
-The system enables clients to privately retrieve records while maintaining Hyperledger Fabric’s endorsement and audit workflow through smart contracts. 
-The novelty of our approach lies in the integration of computational Private Information Retrieval (CPIR) into Fabric chaincode using the Brakerski--Gentry--Vaikuntanathan (BGV) homomorphic encryption scheme. 
-This design allows endorsing peers to execute read-only queries over encrypted inputs without learning which record was accessed. 
-To safeguard query confidentiality and mitigate the risk of access-pattern leakage, we employ a combination of homomorphic encryption and Fabric’s chaincode execution model. 
+We introduce a blockchain-based query privacy system designed for permissioned ledgers. 
+The system enables clients to privately retrieve from the ledger while endorsing peers can evaluate read-only queries over encrypted inputs without learning which record was accessed.  
+The novelty of our approach lies in the integration of computational Private Information Retrieval (CPIR) into Hyperledger Fabric chaincode using the Brakerski--Gentry--Vaikuntanathan (BGV) homomorphic encryption scheme. 
 This approach ensures that clients remain the sole holders of decryption keys, while peers perform only black-box computations, thereby enhancing overall privacy without requiring trusted hardware or protocol modifications.
 
 \noindent Our system is composed of the following entities:
 
 \begin{itemize}
-    \item \textbf{Data Owner (DO):} In our context, the Data Owners are the endorsing peers of the Hyperledger Fabric network. 
-    They maintain the plaintext polynomial representation of the ledger database $m_{\mathrm{DB}}$ in their world state. 
-    Upon receiving an encrypted query, the DO executes the PIR chaincode, homomorphically evaluates the query against $m_{\mathrm{DB}}$, and returns only the encrypted response $ct_r$. 
-    The DO is modeled as \emph{honest-but-curious}, faithfully executing the protocol but potentially attempting to infer query intent from observed arguments or logs.
-
-    \item \textbf{Data Requester (DR):} The Data Requester is a client organization that wishes to privately obtain a record from the ledger. 
-    The DR generates a homomorphic encryption key pair $(pk,sk)$, constructs a one-hot encrypted query $ct_q = \mathsf{Enc}_{pk}(v_i)$, and submits it via the PIR chaincode interface. 
-    Only the DR holds the secret key $sk$ and is able to decrypt the response to recover the requested record $d_i$.
-
-    \item \textbf{Ordering Service (OS):} The ordering service provides consensus by sequencing transactions into blocks. 
-    Since PIR queries are executed during the \textsf{evaluate} phase (read-only proposals, not committed to the ledger), the OS is not directly involved in query privacy. 
-    Its role is limited to normal write operations, ensuring global ordering and consistency of the ledger.
-
-    \item \textbf{Committing Peers (CP):} These peers validate endorsed transactions and update the world state after block commitment. 
-    As with the OS, committing peers are unaffected by PIR queries but remain essential for preserving ledger integrity and synchronization across the consortium.
-
-    \item \textbf{Gateway (PF):} The Gateway refers to the Fabric chaincode interface through which DRs and DOs interact. 
-    It is not a trusted third party, but rather a set of deterministic smart contracts that coordinate CPIR operations. 
-    The Gateway ensures that encrypted queries and responses flow correctly between DRs and DOs, while preventing any alteration of sensitive data. 
-    All trust-critical logic (query evaluation, ciphertext serialization, and endorsement) is encapsulated in chaincode, ensuring tamper-resistance and transparency without relying on an external intermediary.
+    \item \textbf{Data Owner ($\mathcal{DO}$):} Endorsing peers that hold the current plaintext polynomial $m_{\mathrm{DB}}$ in world state and execute PIR during \textsf{evaluate}. $\mathcal{DO}$ is honest-but-curious.
+    \item \textbf{Data Writer ($\mathcal{DW}$):} A client organization that provisions or refreshes the database. $\mathcal{DW}$ invokes \textsf{submit} to initialize the ledger (e.g., set $n$ and template bounds). Chaincode computes $record_s$, packs $D=\{d_0,\dots,d_{n-1}\}$, encodes it into $m_{\mathrm{DB}}$, and persists it.
+    \item \textbf{Data Requester ($\mathcal{DR}$):} A client that privately retrieves a record. $\mathcal{DR}$ runs $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$, forms $ct_q=\mathsf{Enc}_{pk}(v_i)$, calls \textsf{evaluate} \textsf{PIRQuery}, and later decrypts $ct_r$.
+    \item \textbf{Gateway ($\mathcal{GW}$):} The Fabric client/chaincode interface used by $\mathcal{DW}$ and $\mathcal{DR}$ to invoke \textsf{InitLedger}, \textsf{GetMetadata}, and \textsf{PIRQuery}. It follows standard Fabric semantics; no extra trust is assumed.
 \end{itemize}
 
-\noindent\textit{Remark.} 
-In Hyperledger Fabric, the term ``ledger'' encompasses both the blockchain log of all transactions and the world state snapshot of the latest key--value pairs. 
-Our scheme operates on the world state: the plaintext polynomial $m_{\mathrm{DB}}$ represents the current key--value table at the time of query. 
-Thus PIR evaluation retrieves records from the up-to-date database snapshot, not from historical transaction logs.
+\noindent\textit{Remark.} In Fabric, the "ledger" comprises the blockchain log and the world state. Our CPIR operates on the world state: $m_{\mathrm{DB}}$ encodes the latest key--value snapshot, not the historical transaction logs.
 
 \subsection{Security Assumptions and Threat Model}
 
 Our design follows the standard \emph{honest-but-curious} adversarial model. 
-Endorsing peers (DOs) are assumed to correctly execute chaincode but may attempt to infer sensitive information from inputs, logs, or read-sets. 
 We explicitly consider the following assumptions and threats:
 
 \begin{itemize}
-    \item \textbf{Honest-but-curious endorsers.} Endorsing peers are the primary adversarial vantage point. 
-    They can observe all chaincode inputs during \textsf{evaluate} calls and may record ciphertexts, metadata, or execution traces. 
-    Their goal is to infer the index of the queried record.
-
-    \item \textbf{Network adversaries.} External attackers may eavesdrop on ciphertexts transmitted between Data Requesters (DRs) and Data Owners (DOs). 
-    Security relies on the hardness assumptions of the BGV homomorphic encryption scheme; without the secret key $sk$, ciphertexts are indistinguishable from random.
-
-    \item \textbf{Out-of-scope threats.} We do not address traffic analysis (e.g., repeated queries, frequency analysis) or timing side-channels (e.g., differences in execution latency). 
-    These leakages are orthogonal to our CPIR construction and are discussed as future work.
+    \item \textbf{Endorsing peers ($\mathcal{DO}$).} Execute chaincode correctly but may try to infer the queried index from \textsf{evaluate} inputs or logs. They see $ct_q$, metadata, and $m_{\mathrm{DB}}$.
+    \item \textbf{Data Writer ($\mathcal{DW}$).} Issues initialization writes via \textsf{submit}. $\mathcal{DW}$ is not trusted with decryption keys and learns nothing about $\mathcal{DR}$’s queries. We assume $\mathcal{DW}$ follows the write protocol but is not relied upon for privacy.
+    \item \textbf{External observers.} May eavesdrop on client–peer traffic. Without $sk$, $ct_q$ and $ct_r$ reveal nothing under BGV assumptions.
+    \item \textbf{Out of scope.} Traffic analysis and timing side-channels; the only permitted leakage is $\mathcal{L}$ (ciphertext size and protocol timing).
 \end{itemize}
 
 \noindent \textbf{Security objective.} 
-The system ensures that, for any query index $i \in [n]$, endorsing peers and external observers cannot distinguish which record $d_i$ was requested. 
+For any $i\in[n]$, neither $\mathcal{DO}$ nor external observers can distinguish which $d_i$ is requested from $ct_q$ and $ct_r$.
 The only permissible leakage is ciphertext size and protocol timing, denoted collectively as $\mathcal{L}$.
 
 
@@ -328,29 +311,20 @@ Its purpose is to ensure that query indices remain hidden from endorsing peers w
 At a high level, the workflow consists of four stages, illustrated in Fig.~\ref{fig:system-overview}.
 
 \begin{enumerate}
-    \item \textbf{Ledger initialization.} 
-    Data Owners (DOs) encode the database $D=\{d_0,\dots,d_{n-1}\}$ into a plaintext polynomial $m_{\mathrm{DB}}$ and store it in the Fabric world state through the \textsf{InitLedger} function.
-    
-    \item \textbf{Metadata discovery.} 
-    Data Requesters (DRs) obtain structural parameters such as the number of records $n$ and slots per record using lightweight chaincode calls (e.g., \textsf{GetMetadata}). 
-    This step reveals no sensitive content and is necessary to construct valid PIR queries.
-    
-    \item \textbf{Private retrieval.} 
-    The DR generates a one-hot vector $v_i$ for the desired index $i$, encrypts it into $ct_q=\mathsf{Enc}_{pk}(v_i)$, and submits it via the \textsf{PIRQuery} function. 
-    The DO evaluates $ct_q$ against $m_{\mathrm{DB}}$ to compute $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})=\mathsf{Enc}_{pk}(d_i)$ and returns the ciphertext.
-    
-    \item \textbf{Decryption.} 
-    The DR decrypts $ct_r$ using $sk$, recovering $d_i=\mathsf{Dec}_{sk}(ct_r)$. 
-    Only the requester can reconstruct the plaintext record, while endorsing peers learn nothing about which index was queried.
+    \item \textbf{Ledger initialization.}
+    $\mathcal{DW}$ invokes \textsf{InitLedger} via $\mathcal{GW}$ using \textsf{submit}. Chaincode derives $record_s$ from $record_b$, packs $D$ into $\mathbf{c}=(c_0,\dots,c_{N-1})$, encodes $m_{\mathrm{DB}}$, and stores $m_{\mathrm{DB}}$ and metadata in world state held by $\mathcal{DO}$.
+    \item \textbf{Metadata discovery.}
+    $\mathcal{DR}$ calls \textsf{GetMetadata} via \textsf{evaluate} to obtain $n$, $record_s$, and BGV parameters needed to form a valid query.
+    \item \textbf{Private retrieval.}
+    $\mathcal{DR}$ constructs $ct_q=\mathsf{Enc}_{pk}(v_i)$ and invokes \textsf{PIRQuery} via \textsf{evaluate}. $\mathcal{DO}$ computes $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})$ and returns it.
+    \item \textbf{Decryption.}
+    $\mathcal{DR}$ decrypts $ct_r$ to recover $d_i=\mathsf{Dec}_{sk}(ct_r)$.
 \end{enumerate}
-
-This design ensures that all Fabric entities retain their original roles: endorsers execute queries, the ordering service and committing peers manage writes, and clients hold cryptographic keys. 
-The novelty is that endorsing peers now operate exclusively on encrypted selectors, making query intent indistinguishable.
 
 \begin{figure}[!t]
     \centering
     \includegraphics[width=\columnwidth]{figures/diagrams/1_workflow.png}
-    \caption{System overview. A Data Requester (DR) submits an encrypted query $ct_q$ via the chaincode interface. The Data Owner (DO) evaluates it against the database polynomial $m_{\mathrm{DB}}$ and returns an encrypted response $ct_r$, which only the DR can decrypt.}
+    \caption{Workflow: $\mathcal{DW}$ initializes the world state by causing chaincode to encode $D$ into $m_{\mathrm{DB}}$ and persist it. $\mathcal{DR}$ later obtains metadata, submits $ct_q=\mathsf{Enc}_{pk}(v_i)$, endorsing peers ($\mathcal{DO}$) evaluate $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})$, and $\mathcal{DR}$ decrypts to $d_i$.}
     \label{fig:system-overview}
 \end{figure}
 
@@ -358,12 +332,6 @@ The novelty is that endorsing peers now operate exclusively on encrypted selecto
 
 To enable PIR queries over structured ledger data, we must embed records into a plaintext polynomial $m_{\mathrm{DB}}$ suitable for BGV evaluation. 
 Our prototype adopts a fixed-width packing strategy, illustrated in Fig.~\ref{fig:polynomial-construction}, which proceeds in four steps.
-
-\paragraph{Step 1: Serialize to Byte Array.} 
-Each ledger record $d_i$ is serialized as a UTF-8 byte array. 
-In our motivating use case of Cyber Threat Intelligence (CTI) sharing, JSON objects containing fields such as hash digests and threat levels are flattened into byte sequences. 
-Every character is represented by its ASCII code in $[0,255]$. 
-This ensures that arbitrary structured records can be embedded in the polynomial without loss of information.
 
 \begin{figure*}[!t]
     \centering
@@ -374,8 +342,14 @@ This ensures that arbitrary structured records can be embedded in the polynomial
     \label{fig:polynomial-construction}
 \end{figure*}
 
-\paragraph{Step 2: Calculate Slot Window.} 
-We determine the slot allocation per record as
+\textbf{Step 1: Serialize to Byte Array.}
+Each ledger record $d_i$ is serialized as a UTF-8 byte array. 
+In our motivating use case of Cyber Threat Intelligence (CTI) sharing, JSON objects containing fields such as hash digests and threat levels are flattened into byte sequences. 
+Every character is represented by its ASCII code in $[0,255]$. 
+This ensures that arbitrary structured records can be embedded in the polynomial without loss of information.
+
+\textbf{Step 2: Calculate Slot Window.} 
+We determine the slot allocation per record as:
 \[
 record_s = \left\lceil \frac{record_b}{\textit{bytesPerSlot}} \right\rceil,
 \]
@@ -384,25 +358,21 @@ In our prototype, each slot stores exactly one byte.
 For example, if the largest record is $126$ bytes, then $record_s = \lceil 126/1 \rceil = 126$, which rounds up to $128$ slots due to the discrete window policy.  
 This guarantees uniform slot windows across all records, simplifying query construction at the cost of potential padding overhead.
 
-\paragraph{Step 3: Pack into Coefficient Vector.} 
+\textbf{Step 3: Pack into Coefficient Vector.} 
 Serialized byte arrays are inserted into disjoint slot windows of length $record_s$ within a coefficient vector 
 $c = (c_0, c_1, \dots, c_{N-1})$,  
 where $N = 2^{\log N}$ is the ring capacity of the BGV scheme. 
 Padding zeros are added if a record is shorter than $record_s$.  
 Thus each record $d_i$ occupies a contiguous slot interval that can be privately retrieved through PIR.
 
-\paragraph{Step 4: Encode into Polynomial.} 
-Finally, the coefficient vector $d$ is encoded into a plaintext polynomial
+\textbf{Step 4: Encode into Polynomial.} 
+Finally, the coefficient vector $d$ is encoded into a plaintext polynomial:
 \[
 m_{\mathrm{DB}}(X) = \sum_{j=0}^{N-1} c_j X^j \in R_t,
 \]
 where $R_t = \mathbb{Z}_t[X]/(X^N+1)$. 
 This polynomial serves as the plaintext database representation stored in the Fabric world state. 
 Endorsing peers operate over $m_{\mathrm{DB}}$ during PIR queries, while clients recover only the slots corresponding to their requested record.
-
-\noindent This four-step construction balances simplicity and generality. 
-While fixed-width packing introduces some wasted slots, it guarantees consistent indexing and enables record-level PIR retrieval. 
-Selective field-level retrieval would require adaptive packing with variable slot windows, which we leave as future work.
 
 \subsection{Packing Constraints}
 
@@ -411,7 +381,7 @@ $(\log N, n, record_s)$ that satisfy \emph{all} of the following constraints.
 These constraints form a hierarchical relationship: template requirements dominate discrete allocation, 
 and both are ultimately bounded by ring capacity.
 
-\paragraph{Constraint 1: Ring capacity (global upper bound).}
+\textbf{Constraint 1: Ring capacity.}
 The total number of occupied slots cannot exceed the ring size:
 \[
 n \cdot record_s \ \leq \ N.
@@ -420,7 +390,7 @@ This represents the fundamental mathematical limit imposed by the cryptographic 
 For example, with $\log N = 13$ ($N = 8192$) and $record_s = 224$, 
 at most $\lfloor 8192/224 \rfloor = 36$ records can be packed.
 
-\paragraph{Constraint 2: Record structure requirements (template-specific minima).}
+\textbf{Constraint 2: Template-specific minima.}
 Each security level ($\log N$) corresponds to a record template with mandatory fields 
 that impose a minimum slot requirement $record_{\mu,\log N}$. Examples include:
 \begin{itemize}
@@ -429,7 +399,7 @@ that impose a minimum slot requirement $record_{\mu,\log N}$. Examples include:
     \item \textbf{Rich records} ($\log N = 15$): MD5 + full SHA-256 + all metadata $\;\;\Rightarrow\;\; record_{\mu,15} \approx 256$ bytes.
 \end{itemize}
 
-These minima arise from generator checks of the form
+These minima arise from generator checks of the form:
 \[
 \begin{aligned}
     \textsf{Mini:}\quad & record_s \ \geq \ record_b + 32 + 15, \\
@@ -440,7 +410,7 @@ These minima arise from generator checks of the form
 where $record_b \approx 113$--125 bytes denotes the base JSON structure 
 and numeric terms represent mandatory hash fields and serialization overhead.
 
-\paragraph{Constraint 3: Discrete allocation policy.}
+\textbf{Constraint 3: Discrete allocation policy.}
 Operationally, we restrict the slot window $record_s$ to a discrete set for implementation simplicity:
 \[
 \mathcal{S} = \{64, 128, 224, 256, 384, 512\} \ \text{bytes}.
@@ -448,46 +418,33 @@ Operationally, we restrict the slot window $record_s$ to a discrete set for impl
 This means that even if Constraints~1 and~2 are satisfied, 
 the configuration is rejected unless $record_s \in \mathcal{S}$.
 
-\paragraph{Constraint hierarchy and feasibility condition.}
-We capture feasibility using three predicates:
+\noindent\textbf{Constraint hierarchy and feasibility.}
+Feasibility of a configuration $(\log N,n,record_s)$ is defined by three predicates:
 \begin{align*}
 \mathsf{Cap}(N,s,n) &: n \cdot s \leq N \quad \text{(ring capacity)} \\
-\mathsf{Min}(\log N,s) &: s \geq \mu_{\log N} \quad \text{(template minimum)} \\
-\mathsf{Disc}(s) &: s \in \mathcal{S} \quad \text{(discrete allocation)}
+\mathsf{Min}(\log N,s) &: s \geq record_{\mu,\log N} \quad \text{(template minimum)} \\
+\mathsf{Disc}(s) &: s \in \mathcal{S} \quad \text{(discrete allocation)} .
 \end{align*}
-where $s = \mathit{slotsPerRecord}$. A configuration is feasible iff $\mathsf{Cap} \land \mathsf{Min} \land \mathsf{Disc}$.
+where $s=record_s$ and $N=2^{\log N}$. A configuration is feasible iff:
+\[
+\mathsf{Cap}(N,s,n)\ \wedge\ \mathsf{Min}(\log N,s)\ \wedge\ \mathsf{Disc}(s).
+\]
 
-\paragraph{Examples of constraint interaction.}
+\noindent\textbf{Examples.} The interaction of these predicates is illustrated in Fig.~\ref{fig:exp-matrix}.
 \begin{itemize}
-    \item \textbf{$\log N=13$, Mini template:} Requires $record_s \geq record_{\mu,13} \approx 128$. 
-    The smallest viable window is $128$ (since $64$ is insufficient). 
-    Capacity yields $n \leq \lfloor 8192/128 \rfloor = 64$.
-
-    \item \textbf{$\log N=14$, Mid template:} Requires $record_s \geq record_{\mu,14} \approx 224$. 
-    Viable windows are $224$, $256$, etc. 
-    With $N = 16384$, $n \leq \lfloor 16384/224 \rfloor = 73$.
-
-    \item \textbf{$\log N=15$, Rich template:} Requires $record_s \geq record_{\mu,15} \approx 256$. 
-    Windows $64$, $128$, $224$ are invalid. 
-    With $N = 32768$, $n \leq \lfloor 32768/256 \rfloor = 128$.
+    \item $\log N=13$ (Mini): requires $record_s \geq record_{\mu,13} \approx 128$, so $128$ is the smallest valid window. Capacity then gives $n \leq \lfloor 8192/128 \rfloor = 64$.
+    \item $\log N=14$ (Mid): requires $record_s \geq record_{\mu,14} \approx 224$, so valid choices are $224,256,\dots$. With $N=16384$, the capacity bound is $n \leq \lfloor 16384/224 \rfloor = 73$.
+    \item $\log N=15$ (Rich): requires $record_s \geq record_{\mu,15} \approx 256$, so smaller windows (64,128,224) are invalid. With $N=32768$, the bound is $n \leq \lfloor 32768/256 \rfloor = 128$.
 \end{itemize}
 
-\begin{figure}[!t]
+\begin{figure}[!b]
     \centering
     \includegraphics[width=\columnwidth]{figures/diagrams/3_feasible_configs.png}
-    \caption{Feasible configurations under all constraints. 
-    Dashed curves: ring capacity for $\log N \in \{13,14,15\}$. 
-    Vertical lines: template-driven minima $record_{\mu,\log N}$ (Constraint~2). 
-    Discrete windows (Constraint~3) align with x-axis ticks. 
-    Circles mark feasible $(\log N,record_s,n)$ triples.}
+    \caption{Feasible configurations under the joint constraints $\mathsf{Cap}$, $\mathsf{Min}$, and $\mathsf{Disc}$. Dashed curves show ring-capacity limits for $\log N \in \{13,14,15\}$, vertical lines mark template-driven minima $record_{\mu,\log N}$, and x-axis ticks correspond to discrete slot sizes $\mathcal{S}$. Circles indicate feasible triples $(\log N,record_s,n)$.}
     \label{fig:exp-matrix}
 \end{figure}
 
-\paragraph{Design implications.}
-This constraint system creates a natural trade-off: higher security levels ($\log N$) 
-support larger databases but require more feature-rich record structures. 
-The discrete allocation policy simplifies implementation while ensuring predictable performance. 
-The experimental matrix reveals that viable configurations cluster where template requirements align with cryptographic capacity, guiding practical parameter selection.
+\noindent\textbf{Implications.} Higher $\log N$ enlarges ring capacity and thus potential $n$, but also forces larger $record_s$ through richer record templates. The discrete allocation policy $\mathcal{S}$ simplifies implementation while bounding overhead. Practically, feasible points emerge only where template requirements align with ring capacity, guiding parameter selection in system deployment.
 
 \subsection{Multi-Channel Architecture}
 
@@ -497,28 +454,18 @@ Compact records fit comfortably under smaller rings, while full JSON objects wit
 To balance scalability and expressiveness, we design a \emph{multi-channel architecture} in Hyperledger Fabric, 
 where each channel is provisioned with a distinct BGV parameter set and record template.
 
-\paragraph{Channel Mini (LogN=13).}
+\textbf{Channel Mini} ($\log N=13$).
 Supports compact CTI records (e.g., MD5, malware family, threat level) with maximum scalability and lowest query latency. 
 For example, with $N=8192$ slots, the system accommodates up to 128 records when $\max_i |d_i| \leq 64$ bytes, 
 and 16 records when $\max_i |d_i| \leq 512$ bytes.
 
-\paragraph{Channel Mid (LogN=14).}
+\textbf{Channel Mid} ($\log N=14$).
 Targets medium-sized records that include MD5 and truncated SHA-256 fields alongside classification metadata. 
 With $N=16384$ slots, the system supports up to 256 records at $\leq 64$ bytes or 32 records at $\leq 512$ bytes.
 
-\paragraph{Channel Rich (LogN=15).}
+\textbf{Channel Rich} ($\log N=15$).
 Handles the most detailed records, including full-length hashes and multiple metadata fields. 
 Here, $N=32768$ slots allow up to 512 records at $\leq 64$ bytes or 64 records at $\leq 512$ bytes.
-
-\paragraph{Channel semantics.}
-Each channel maintains its own plaintext polynomial database $m_{\mathrm{DB}}$ encoded according to Alg.~\ref{alg:ledger-init}. 
-Fabric’s world state thus contains both:
-\begin{enumerate}
-    \item The \emph{normal view}: JSON-formatted CTI records for auditability and integration with non-PIR chaincode.
-    \item The \emph{polynomial view}: $m_{\mathrm{DB}}$, used exclusively by the PIR chaincode for homomorphic evaluation.
-\end{enumerate}
-This dual representation ensures that endorsing peers can still serve conventional read requests 
-(e.g., \textsf{PublicQueryALL}) while PIR queries operate only over the encrypted polynomial interface.
 
 \begin{figure*}[!t]
     \centering
@@ -528,6 +475,17 @@ This dual representation ensures that endorsing peers can still serve convention
     parameterized by $\log N$. This allows compact, mid-size, and rich CTI records to coexist under the same Fabric network.}
     \label{fig:multi-channel}
 \end{figure*}
+
+\textbf{Channel semantics.}
+Each channel maintains its own plaintext polynomial database $m_{\mathrm{DB}}$ encoded according to Fig.~\ref{fig:polynomial-construction}. 
+Fabric’s world state thus contains both:
+\begin{enumerate}
+    \item The \emph{normal view}: JSON-formatted CTI records for auditability and integration with non-PIR chaincode.
+    \item The \emph{polynomial view}: $m_{\mathrm{DB}}$, used exclusively by the PIR chaincode for homomorphic evaluation.
+\end{enumerate}
+This dual representation ensures that endorsing peers can still serve conventional read requests 
+(e.g., \textsf{PublicQueryALL}) while PIR queries operate only over the encrypted polynomial interface.
+
 
 
 

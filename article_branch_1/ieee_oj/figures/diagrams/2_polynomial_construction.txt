@@ -4,7 +4,7 @@ left to right direction
 skinparam linetype ortho
 skinparam packageStyle rectangle
 
-title <math>m_{DB}</math> Construction: From JSON to Plaintext Polynomial
+title Plaintext Polynomial Database Construction
 
 rectangle "1. Serialize to Byte Array" as step1
 note top of step1
