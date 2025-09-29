@@ -165,7 +165,7 @@ A client queries subsets of servers such that no single server learns the select
 \emph{Computational PIR (CPIR).} Achieves privacy with a single server, relying on hardness assumptions and homomorphic encryption. 
 For a database $D=\{d_0,\dots,d_{n-1}\}$ and a one-hot selection vector $\hat{v}_i$, the client computes 
 \[
-c_q = \text{Enc}_{pk}(\hat{v}_i), \qquad c_r = c_q \cdot D = \text{Enc}_{pk}(d_i).
+ct_q = \text{Enc}_{pk}(\hat{v}_i), \qquad ct_r = ct_q \cdot D = \text{Enc}_{pk}(d_i).
 \]
 The server returns $c_r$, which the client decrypts as $d_i = \text{Dec}_{sk}(c_r)$. 
 Thus the queried index $i$ remains hidden from the server.
@@ -180,11 +180,6 @@ In our design, this batching is used to embed the ledger’s key–value table i
 
 \subsection{Notation}
 We summarize the main notation used throughout the paper in Table~\ref{tab:notation}.
-
-\noindent\textit{Remark.} We write $ct_r = ct_q \cdot m_{\mathrm{DB}}$ to denote BGV ciphertext–plaintext multiplication with batching; concretely, this realizes
-\[
-\mathsf{Enc}_{pk}(\hat{v}_i)\ \cdot\ m_{\mathrm{DB}}\ =\ \mathsf{Enc}_{pk}(d_i).
-\]
 
 \begin{table}[!t]
     \caption{Notation}
@@ -203,15 +198,15 @@ We summarize the main notation used throughout the paper in Table~\ref{tab:notat
         \hline
         $m_{\mathrm{DB}}$ & Plaintext polynomial representation of $D$ (BGV batching) \\
         \hline
-        $\hat{v}_i$ & One-hot selection vector for index $i$ (1 in one slot, 0 elsewhere) \\
+        $\hat{v}_i$ & One-hot selector for index $i$ (single 1, rest 0) \\
         \hline
-        $v_i$ & Windowed selector for index $i$ with $record_s$ contiguous ones (retrieves full record window) \\
+        ${v}_i$ & Windowed selector for index $i$ with $record_s$ contiguous ones (retrieves full record window) \\
         \hline
         $pk,\, sk$ & Public / secret keys (BGV) \\
         \hline
-        $ct_q=\mathsf{Enc}_{pk}(v_i)$ & Encrypted query (ciphertext) \\
+        $ct_q=\mathsf{Enc}_{pk}(\mathbf{v}_i)$ & Encrypted query \\
         \hline
-        $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response; $ct_r=\mathsf{Enc}_{pk}(d_i)$ \\
+        $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response \\
         \hline
         $d_i=\mathsf{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
         \hline
@@ -221,11 +216,13 @@ We summarize the main notation used throughout the paper in Table~\ref{tab:notat
         \hline
         $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (ct–pt multiply) \\
         \hline
-        $N$ & Ring dimension ($N=2^{\log N}$) (BGV) \\
+        $N=2^{\log N}$ & Ring dimension (polynomial degree of the scheme) \\
         \hline
-        $q$ & Ciphertext modulus (BGV) \\
+        $\log Q_i$ & Bit-lengths of primes forming modulus chain $Q$ (ciphertext levels) \\
         \hline
-        $t$ & Plaintext modulus (BGV) \\
+        $\log P_i$ & Bit-lengths of special primes $P$ (used for key switching / relinearization) \\
+        \hline
+        $T$ & Plaintext modulus (NTT-friendly prime; Lattigo \texttt{PlaintextModulus}) \\
         \hline
         $record_s$ & Slots allocated per record (slot window size) \\
         \hline
@@ -239,6 +236,14 @@ We summarize the main notation used throughout the paper in Table~\ref{tab:notat
         \hline
         $|\cdot|$, $\mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
         \hline
+        $\mathsf{Cap}(N,s,n)$ & Capacity predicate: $n \cdot s \leq N$ \\
+        \hline
+        $\mathsf{Min}(\log N,s)$ & Template predicate: $s \geq record_{\mu,\log N}$ \\
+        \hline
+        $\mathsf{Disc}(s)$ & Discrete predicate: $s \in \mathcal{S}$ \\
+        \hline
+        $\mathsf{Cap} \wedge \mathsf{Min} \wedge \mathsf{Disc}$ & Feasibility condition for $(\log N,n,record_s)$ \\
+        \hline
         $\mathcal{DO},\,\mathcal{DW},\,\mathcal{DR},\,\mathcal{GW}$ & Data Owner; Data Writer; Data Requester; Gateway \\
         \hline
         \textsf{evaluate}, \textsf{submit} & Fabric read / write transaction phases \\
@@ -247,6 +252,7 @@ We summarize the main notation used throughout the paper in Table~\ref{tab:notat
         \hline
         \end{tabular}
     \end{table}
+    
 
 \subsection{Cryptographic Primitives}
 CPIR can be instantiated as a tuple of probabilistic polynomial-time algorithms:
@@ -430,11 +436,30 @@ where $s=record_s$ and $N=2^{\log N}$. A configuration is feasible iff:
 \mathsf{Cap}(N,s,n)\ \wedge\ \mathsf{Min}(\log N,s)\ \wedge\ \mathsf{Disc}(s).
 \]
 
-\noindent\textbf{Examples.} The interaction of these predicates is illustrated in Fig.~\ref{fig:exp-matrix}.
+\noindent\textbf{Examples.} The interaction of these predicates is illustrated in Fig.~\ref{fig:exp-matrix}. We provide three concrete examples below:
+
+\noindent\emph{a) Polynomial degree} $\log N=13$ (Mini):
 \begin{itemize}
-    \item $\log N=13$ (Mini): requires $record_s \geq record_{\mu,13} \approx 128$, so $128$ is the smallest valid window. Capacity then gives $n \leq \lfloor 8192/128 \rfloor = 64$.
-    \item $\log N=14$ (Mid): requires $record_s \geq record_{\mu,14} \approx 224$, so valid choices are $224,256,\dots$. With $N=16384$, the capacity bound is $n \leq \lfloor 16384/224 \rfloor = 73$.
-    \item $\log N=15$ (Rich): requires $record_s \geq record_{\mu,15} \approx 256$, so smaller windows (64,128,224) are invalid. With $N=32768$, the bound is $n \leq \lfloor 32768/256 \rfloor = 128$.
+    \item $\mathsf{Min}(13,s)$ enforces $s \geq record_{\mu,13} \approx 128$ $\Rightarrow$ the smallest candidate is $s=128$.
+    \item $\mathsf{Disc}(s)$ requires $s \in \mathcal{S}$ $\Rightarrow$ $128$ is allowed (while $64$ is invalid).
+    \item $\mathsf{Cap}(8192,128,n)$ gives $n \leq \lfloor 8192/128 \rfloor = 64$.
+    \item \emph{Feasible:} $(\log N=13,s=128,n \leq 64)$.
+\end{itemize}
+
+\noindent\emph{b) Polynomial degree} $\log N=14$ (Mid):
+\begin{itemize}
+    \item $\mathsf{Min}(14,s)$ enforces $s \geq record_{\mu,14} \approx 224$ $\Rightarrow$ smallest candidate is $224$.
+    \item $\mathsf{Disc}(s)$ allows $224,256,\dots$ but excludes smaller windows.
+    \item $\mathsf{Cap}(16384,224,n)$ gives $n \leq \lfloor 16384/224 \rfloor = 73$.
+    \item \emph{Feasible:} $(\log N=14,s \in \{224,256,\dots\},n \leq 73)$.
+\end{itemize}
+
+\noindent\emph{c) Polynomial degree} $\log N=15$ (Rich): 
+\begin{itemize}
+    \item $\mathsf{Min}(15,s)$ enforces $s \geq record_{\mu,15} \approx 256$.
+    \item $\mathsf{Disc}(s)$ excludes $64,128,224$; smallest valid is $256$.
+    \item $\mathsf{Cap}(32768,256,n)$ gives $n \leq \lfloor 32768/256 \rfloor = 128$.
+    \item \emph{Feasible:} $(\log N=15,s \geq 256,n \leq 128)$.
 \end{itemize}
 
 \begin{figure}[!b]
@@ -444,28 +469,16 @@ where $s=record_s$ and $N=2^{\log N}$. A configuration is feasible iff:
     \label{fig:exp-matrix}
 \end{figure}
 
-\noindent\textbf{Implications.} Higher $\log N$ enlarges ring capacity and thus potential $n$, but also forces larger $record_s$ through richer record templates. The discrete allocation policy $\mathcal{S}$ simplifies implementation while bounding overhead. Practically, feasible points emerge only where template requirements align with ring capacity, guiding parameter selection in system deployment.
+\noindent\textbf{Implications.} Higher $\log N$ enlarges ring capacity and thus potential $n$, but also forces larger $record_s$ through richer record templates. The discrete allocation policy $\mathcal{S}$ simplifies implementation while bounding overhead. Feasible points emerge only where template requirements align with ring capacity, guiding parameter selection in system deployment.
 
 \subsection{Multi-Channel Architecture}
 
 The packing strategy and feasibility constraints highlight an important observation: 
 no single homomorphic parameter set can efficiently support the full diversity of Cyber Threat Intelligence (CTI) record formats. 
 Compact records fit comfortably under smaller rings, while full JSON objects with long cryptographic hashes exceed the slot budget of these configurations. 
-To balance scalability and expressiveness, we design a \emph{multi-channel architecture} in Hyperledger Fabric, 
+To balance scalability and expressiveness, we design a \emph{multi-channel architecture} in Hyperledger Fabric 
+(Fig.~\ref{fig:multi-channel}), 
 where each channel is provisioned with a distinct BGV parameter set and record template.
-
-\textbf{Channel Mini} ($\log N=13$).
-Supports compact CTI records (e.g., MD5, malware family, threat level) with maximum scalability and lowest query latency. 
-For example, with $N=8192$ slots, the system accommodates up to 128 records when $\max_i |d_i| \leq 64$ bytes, 
-and 16 records when $\max_i |d_i| \leq 512$ bytes.
-
-\textbf{Channel Mid} ($\log N=14$).
-Targets medium-sized records that include MD5 and truncated SHA-256 fields alongside classification metadata. 
-With $N=16384$ slots, the system supports up to 256 records at $\leq 64$ bytes or 32 records at $\leq 512$ bytes.
-
-\textbf{Channel Rich} ($\log N=15$).
-Handles the most detailed records, including full-length hashes and multiple metadata fields. 
-Here, $N=32768$ slots allow up to 512 records at $\leq 64$ bytes or 64 records at $\leq 512$ bytes.
 
 \begin{figure*}[!t]
     \centering
@@ -476,15 +489,56 @@ Here, $N=32768$ slots allow up to 512 records at $\leq 64$ bytes or 64 records a
     \label{fig:multi-channel}
 \end{figure*}
 
-\textbf{Channel semantics.}
-Each channel maintains its own plaintext polynomial database $m_{\mathrm{DB}}$ encoded according to Fig.~\ref{fig:polynomial-construction}. 
-Fabric’s world state thus contains both:
-\begin{enumerate}
-    \item The \emph{normal view}: JSON-formatted CTI records for auditability and integration with non-PIR chaincode.
-    \item The \emph{polynomial view}: $m_{\mathrm{DB}}$, used exclusively by the PIR chaincode for homomorphic evaluation.
-\end{enumerate}
-This dual representation ensures that endorsing peers can still serve conventional read requests 
-(e.g., \textsf{PublicQueryALL}) while PIR queries operate only over the encrypted polynomial interface.
+\textbf{a) Channel Mini} ($\log N=13$).  
+Supports compact CTI records (e.g., MD5, malware family, threat level) with maximum scalability and lowest query latency. 
+For example, with $N=8192$ slots, the system accommodates up to 128 records when $\max_i |d_i| \leq 64$ bytes, 
+and 16 records when $\max_i |d_i| \leq 512$ bytes.
+
+\textbf{b) Channel Mid} ($\log N=14$).  
+Targets medium-sized records that include MD5 and truncated SHA-256 fields alongside classification metadata. 
+With $N=16384$ slots, the system supports up to 256 records at $\leq 64$ bytes or 32 records at $\leq 512$ bytes.
+
+\textbf{c) Channel Rich} ($\log N=15$).  
+Handles the most detailed records, including full-length hashes and multiple metadata fields. 
+Here, $N=32768$ slots allow up to 512 records at $\leq 64$ bytes or 64 records at $\leq 512$ bytes.
+
+\noindent\textbf{Channel semantics.}  
+As shown in Fig.~\ref{fig:multi-channel}, each channel maintains its own PIR chaincode instance and world state. 
+The world state contains:
+\begin{itemize}
+    \item The \emph{polynomial view}: the packed plaintext polynomial $m_{\mathrm{DB}}$ under key \texttt{"m\_DB"}.
+    \item The \emph{normal view}: JSON records stored individually under keys \texttt{"record\%03d"} for auditability and interoperability with non-PIR chaincode.
+    \item \emph{Metadata}: 
+    \begin{itemize}
+        \item \texttt{"n"}: number of records $n$,
+        \item \texttt{"record\_s"}: slots per record $record_s$,
+        \item \texttt{"bgv\_params"}: cryptographic parameters $\{\log N, N, \log Q_i, \log P_i, T\}$.
+    \end{itemize}
+\end{itemize}
+This dual representation ensures that endorsing peers can serve conventional read requests while PIR queries operate exclusively on the polynomial $m_{\mathrm{DB}}$. 
+Metadata allows clients to reconstruct the cryptographic context (parameters, slot policy, capacity) needed to form valid queries.
+
+\noindent\textit{Remark (ledger capacity).} 
+A practical concern is the maximum size of the ledger when channels store both JSON records and the polynomial $m_{\mathrm{DB}}$. 
+In Hyperledger Fabric, two layers impose constraints:
+
+\begin{itemize}
+    \item \textbf{World state (LevelDB/CouchDB).} 
+    Fabric does not set a fixed cap on the number of records $n$; limits are determined by disk capacity and I/O throughput. 
+    CouchDB enforces a configurable \texttt{max\_document\_size}, which applies to large values such as $m_{\mathrm{DB}}$. 
+    Our construction stores $m_{\mathrm{DB}}$ as a single world-state entry, plus metadata (\texttt{"n"}, \texttt{"record\_s"}, \texttt{"bgv\_params"}) and optional JSON records (\texttt{"record\%03d"}). 
+    Feasibility is therefore governed primarily by the size of $m_{\mathrm{DB}}$ and by the slot constraints in Fig.~\ref{fig:exp-matrix}, not by Fabric itself.
+
+    \item \textbf{Ledger history (blockchain log).} 
+    Block size is limited by ordering-service parameters (\texttt{AbsoluteMaxBytes}, \texttt{PreferredMaxBytes}). 
+    However, PIR queries are executed during the \textsf{evaluate} phase and do not produce blocks. 
+    Only \textsf{submit} transactions (e.g., \textsf{InitLedger} or record updates) contribute to block payloads. 
+    Thus block size limits are relevant only when initializing or refreshing $m_{\mathrm{DB}}$, not during PIR queries.
+\end{itemize}
+
+\noindent\textbf{Implication.} 
+The effective capacity of a channel is determined by cryptographic feasibility (\S\ref{fig:exp-matrix}) and the maximum size of a single world-state value, rather than by Fabric’s block size. 
+For very large CTI objects, a common extension is to store them off-chain (e.g., in IPFS) and persist only their content identifiers (CIDs) in world state, while $m_{\mathrm{DB}}$ continues to support private retrieval of the structured fields.
 
 
 
