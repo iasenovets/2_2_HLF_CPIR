@@ -13,6 +13,18 @@
 \AtBeginDocument{\definecolor{tmlcncolor}{cmyk}{0.93,0.59,0.15,0.02}\definecolor{NavyBlue}{RGB}{0,86,125}}
 
 
+\newcommand{\encB}[1]{\mathsf{enc}^{\mathrm{B64}}\!\left(#1\right)}
+\newcommand{\decB}[1]{\mathsf{dec}^{\mathrm{B64}}\!\left(#1\right)}
+\newcommand{\encP}[1]{\mathsf{enc}^{\mathrm{poly}}\!\left(#1\right)}
+\newcommand{\decP}[1]{\mathsf{dec}^{\mathrm{poly}}\!\left(#1\right)}
+
+\newcommand{\ser}[1]{\mathsf{ser}^{\mathrm{bin}}\!\left(#1\right)}
+\newcommand{\des}[1]{\mathsf{des}^{\mathrm{bin}}\!\left(#1\right)}
+\newcommand{\selMinLogN}[1]{\mathsf{selMinLogN}\!\left(#1\right)}
+\newcommand{\selParams}[1]{\mathsf{selParams}\!\left(#1\right)}
+\newcommand{\genRecords}[1]{\mathsf{genRecords}\!\left(#1\right)}
+\newcommand{\feasible}[1]{\mathsf{feasible}\!\left(#1\right)}
+
 
 
 \def\OJlogo{\vspace{-4pt}$<$Society logo(s) and publication title will appear here.$>$}
@@ -204,7 +216,7 @@ We summarize the main notation used throughout the paper in Table~\ref{tab:notat
         \hline
         $pk,\, sk$ & Public / secret keys (BGV) \\
         \hline
-        $ct_q=\mathsf{Enc}_{pk}(\mathbf{v}_i)$ & Encrypted query \\
+        $ct_q=\mathsf{Enc}_{pk}(\hat{v}_i)$ & Encrypted query \\
         \hline
         $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response \\
         \hline
@@ -255,16 +267,23 @@ We summarize the main notation used throughout the paper in Table~\ref{tab:notat
     
 
 \subsection{Cryptographic Primitives}
-CPIR can be instantiated as a tuple of probabilistic polynomial-time algorithms:
+
+The Brakerski--Gentry--Vaikuntanathan (BGV) scheme defines operations over two polynomial rings: 
+a ciphertext ring $R_Q = \mathbb{Z}_Q[X]/(X^N+1)$ and a plaintext ring $R_T = \mathbb{Z}_T[X]/(X^N+1)$, 
+both sharing the same dimension $N=2^{\log N}$. 
+In our implementation, these rings are jointly specified by a single parameter literal 
+$(\log N, \log Q_i, \log P_i, T)$ as provided by the Lattigo library. 
+The field $T$ determines $R_T$, while the modulus chain $(Q,P)$ and their bit-lengths $(\log Q_i, \log P_i)$ determine $R_Q$.
+
+We instantiate Computational PIR as a tuple of probabilistic polynomial-time algorithms
 \[
 \Pi = (\mathsf{KeyGen}, \mathsf{Enc}, \mathsf{Eval}, \mathsf{Dec}),
 \]
 defined as follows:
-
 \begin{itemize}
     \item $\mathsf{KeyGen}(\lambda) \rightarrow (pk, sk)$: On input the security parameter $\lambda$, output a public key $pk$ and a secret key $sk$.
-    \item $\mathsf{Enc}_{pk}(\hat{v}_i) \rightarrow ct_q$: Given a one-hot selection vector $\hat{v}_i \in \{0,1\}^n$, produce an encrypted query ciphertext $ct_q$ under $pk$.
-    \item $\mathsf{Eval}(ct_q, m_{\mathrm{DB}}) \rightarrow ct_r$: Given an encrypted query $ct_q$ and the plaintext database polynomial $m_{\mathrm{DB}}$, homomorphically evaluate the product to obtain an encrypted response $ct_r$.
+    \item $\mathsf{Enc}_{pk}(\hat{v}_i) \rightarrow ct_q$: Given a windowed selection vector $\hat{v}_i \in \{0,1\}^N$, encode it into the plaintext ring $R_T$ and encrypt to a query ciphertext $ct_q$ under $pk$.
+    \item $\mathsf{Eval}(ct_q, m_{\mathrm{DB}}) \rightarrow ct_r$: Given $ct_q$ and the plaintext polynomial database $m_{\mathrm{DB}} \in R_T$, homomorphically evaluate the product to obtain an encrypted response $ct_r \in R_Q$.
     \item $\mathsf{Dec}_{sk}(ct_r) \rightarrow d_i$: Using the secret key $sk$, decrypt the response ciphertext $ct_r$ to recover the desired record $d_i$.
 \end{itemize}
 
@@ -274,6 +293,16 @@ Correctness requires that for all $i \in [n]$,
 \mathsf{Dec}_{sk}\!\left(\mathsf{Eval}\!\left(\mathsf{Enc}_{pk}(\hat{v}_i), m_{\mathrm{DB}}\right)\right) = d_i.
 \]
 
+\noindent \textit{Remark (restricted operation set).} 
+The full BGV scheme also provides $\mathsf{EvalKeyGen}$ to generate relinearization and rotation keys, 
+supporting ciphertext–ciphertext multiplication, automorphisms, and modulus switching. 
+Our PIR construction requires only ciphertext–plaintext multiplication ($ct \times pt$), 
+since the database polynomial $m_{\mathrm{DB}}$ is kept in plaintext within world state. 
+This avoids degree growth and level management, so we do not expose $\mathsf{EvalKeyGen}$ in chaincode. 
+Extending to ciphertext–ciphertext evaluation would require additional on-chain artifacts 
+(relinearization keys, Galois keys, encrypted $m_{\mathrm{DB}}$), larger world-state footprint, and higher evaluation cost, 
+which we leave as future work.
+    
 \section{Proposed System}
 
 \subsection{System Model}
@@ -291,7 +320,7 @@ This approach ensures that clients remain the sole holders of decryption keys, w
     \item \textbf{Gateway ($\mathcal{GW}$):} The Fabric client/chaincode interface used by $\mathcal{DW}$ and $\mathcal{DR}$ to invoke \textsf{InitLedger}, \textsf{GetMetadata}, and \textsf{PIRQuery}. It follows standard Fabric semantics; no extra trust is assumed.
 \end{itemize}
 
-\noindent\textit{Remark.} In Fabric, the "ledger" comprises the blockchain log and the world state. Our CPIR operates on the world state: $m_{\mathrm{DB}}$ encodes the latest key--value snapshot, not the historical transaction logs.
+\noindent\textit{Remark (world-state scope).} In Fabric, the "ledger" comprises the blockchain log and the world state. Our CPIR operates on the world state: $m_{\mathrm{DB}}$ encodes the latest key--value snapshot, not the historical transaction logs.
 
 \subsection{Security Assumptions and Threat Model}
 
@@ -318,7 +347,7 @@ At a high level, the workflow consists of four stages, illustrated in Fig.~\ref{
 
 \begin{enumerate}
     \item \textbf{Ledger initialization.}
-    $\mathcal{DW}$ invokes \textsf{InitLedger} via $\mathcal{GW}$ using \textsf{submit}. Chaincode derives $record_s$ from $record_b$, packs $D$ into $\mathbf{c}=(c_0,\dots,c_{N-1})$, encodes $m_{\mathrm{DB}}$, and stores $m_{\mathrm{DB}}$ and metadata in world state held by $\mathcal{DO}$.
+    $\mathcal{DW}$ invokes \textsf{InitLedger} via $\mathcal{GW}$ using \textsf{submit}. Chaincode derives $record_s$ from $record_b$, packs $D$ into ${c}=(c_0,\dots,c_{N-1})$, encodes $m_{\mathrm{DB}}$, and stores $m_{\mathrm{DB}}$ and metadata in world state held by $\mathcal{DO}$.
     \item \textbf{Metadata discovery.}
     $\mathcal{DR}$ calls \textsf{GetMetadata} via \textsf{evaluate} to obtain $n$, $record_s$, and BGV parameters needed to form a valid query.
     \item \textbf{Private retrieval.}
@@ -330,7 +359,7 @@ At a high level, the workflow consists of four stages, illustrated in Fig.~\ref{
 \begin{figure}[!t]
     \centering
     \includegraphics[width=\columnwidth]{figures/diagrams/1_workflow.png}
-    \caption{Workflow: $\mathcal{DW}$ initializes the world state by causing chaincode to encode $D$ into $m_{\mathrm{DB}}$ and persist it. $\mathcal{DR}$ later obtains metadata, submits $ct_q=\mathsf{Enc}_{pk}(v_i)$, endorsing peers ($\mathcal{DO}$) evaluate $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})$, and $\mathcal{DR}$ decrypts to $d_i$.}
+    \caption{“Workflow. $\mathcal{DW}$ initializes the ledger via $\mathcal{GW}$, which triggers chaincode on endorsing peers ($\mathcal{DO}$). $\mathcal{DO}$ executes the protocol and persists state in world state ($m_{\mathrm{DB}}$, metadata, JSON records). $\mathcal{DR}$ later obtains metadata, submits $ct_q=\mathsf{Enc}{pk}(v_i)$, $\mathcal{DO}$ evaluates $ct_r=\mathsf{Eval}(ct_q,m{\mathrm{DB}})$ against world state, and $\mathcal{DR}$ decrypts to $d_i$.}
     \label{fig:system-overview}
 \end{figure}
 
@@ -462,7 +491,7 @@ where $s=record_s$ and $N=2^{\log N}$. A configuration is feasible iff:
     \item \emph{Feasible:} $(\log N=15,s \geq 256,n \leq 128)$.
 \end{itemize}
 
-\begin{figure}[!b]
+\begin{figure}[!h]
     \centering
     \includegraphics[width=\columnwidth]{figures/diagrams/3_feasible_configs.png}
     \caption{Feasible configurations under the joint constraints $\mathsf{Cap}$, $\mathsf{Min}$, and $\mathsf{Disc}$. Dashed curves show ring-capacity limits for $\log N \in \{13,14,15\}$, vertical lines mark template-driven minima $record_{\mu,\log N}$, and x-axis ticks correspond to discrete slot sizes $\mathcal{S}$. Circles indicate feasible triples $(\log N,record_s,n)$.}
@@ -512,33 +541,216 @@ The world state contains:
     \begin{itemize}
         \item \texttt{"n"}: number of records $n$,
         \item \texttt{"record\_s"}: slots per record $record_s$,
-        \item \texttt{"bgv\_params"}: cryptographic parameters $\{\log N, N, \log Q_i, \log P_i, T\}$.
+        \item \texttt{"bgv\_params"}: $\{\log N, N, \log Q_i, \log P_i, T\}$.
     \end{itemize}
 \end{itemize}
-This dual representation ensures that endorsing peers can serve conventional read requests while PIR queries operate exclusively on the polynomial $m_{\mathrm{DB}}$. 
-Metadata allows clients to reconstruct the cryptographic context (parameters, slot policy, capacity) needed to form valid queries.
 
 \noindent\textit{Remark (ledger capacity).} 
 A practical concern is the maximum size of the ledger when channels store both JSON records and the polynomial $m_{\mathrm{DB}}$. 
 In Hyperledger Fabric, two layers impose constraints:
 
-\begin{itemize}
-    \item \textbf{World state (LevelDB/CouchDB).} 
-    Fabric does not set a fixed cap on the number of records $n$; limits are determined by disk capacity and I/O throughput. 
-    CouchDB enforces a configurable \texttt{max\_document\_size}, which applies to large values such as $m_{\mathrm{DB}}$. 
-    Our construction stores $m_{\mathrm{DB}}$ as a single world-state entry, plus metadata (\texttt{"n"}, \texttt{"record\_s"}, \texttt{"bgv\_params"}) and optional JSON records (\texttt{"record\%03d"}). 
-    Feasibility is therefore governed primarily by the size of $m_{\mathrm{DB}}$ and by the slot constraints in Fig.~\ref{fig:exp-matrix}, not by Fabric itself.
+\textbf{a) World state (LevelDB/CouchDB).} 
+Fabric does not set a fixed cap on the number of records $n$; limits are determined by disk capacity and I/O throughput. 
+CouchDB enforces a configurable \texttt{max\_document\_size}, which applies to large values such as $m_{\mathrm{DB}}$. 
+Our construction stores $m_{\mathrm{DB}}$ as a single world-state entry, plus metadata (\texttt{"n"}, \texttt{"record\_s"}, \texttt{"bgv\_params"}) and optional JSON records (\texttt{"record\%03d"}). 
+Feasibility is therefore governed primarily by the size of $m_{\mathrm{DB}}$ and by the slot constraints in Fig.~\ref{fig:exp-matrix}, not by Fabric itself.
 
-    \item \textbf{Ledger history (blockchain log).} 
-    Block size is limited by ordering-service parameters (\texttt{AbsoluteMaxBytes}, \texttt{PreferredMaxBytes}). 
-    However, PIR queries are executed during the \textsf{evaluate} phase and do not produce blocks. 
-    Only \textsf{submit} transactions (e.g., \textsf{InitLedger} or record updates) contribute to block payloads. 
-    Thus block size limits are relevant only when initializing or refreshing $m_{\mathrm{DB}}$, not during PIR queries.
-\end{itemize}
+\textbf{b) Ledger history (blockchain log).} 
+Block size is limited by ordering-service parameters (\texttt{AbsoluteMaxBytes}, \texttt{PreferredMaxBytes}). 
+However, PIR queries are executed during the \textsf{evaluate} phase and do not produce blocks. 
+Only \textsf{submit} transactions (e.g., \textsf{InitLedger} or record updates) contribute to block payloads. 
+Thus block size limits are relevant only when initializing or refreshing $m_{\mathrm{DB}}$, not during PIR queries.
 
 \noindent\textbf{Implication.} 
 The effective capacity of a channel is determined by cryptographic feasibility (\S\ref{fig:exp-matrix}) and the maximum size of a single world-state value, rather than by Fabric’s block size. 
 For very large CTI objects, a common extension is to store them off-chain (e.g., in IPFS) and persist only their content identifiers (CIDs) in world state, while $m_{\mathrm{DB}}$ continues to support private retrieval of the structured fields.
+
+\subsection{Workflow Narrative}
+
+The complete workflow of our CPIR-enabled Fabric system consists of four stages, illustrated in Fig.~\ref{fig:system-overview}. 
+A Data Writer ($\mathcal{DW}$) initializes the ledger by encoding the database $D=\{d_0,\dots,d_{n-1}\}$ into a plaintext polynomial $m_{\mathrm{DB}}$ and submitting it via \textsf{InitLedger}. 
+Data Requesters ($\mathcal{DR}$) subsequently discover the necessary parameters by invoking \textsf{GetMetadata}, which exposes only structural information such as $n$, $record_s$, and the BGV parameter set $(\log N,\log Q_i,\log P_i,T)$. 
+To privately obtain a record, a $\mathcal{DR}$ constructs a windowed selector ${v}_i$, encrypts it into $ct_q=\mathsf{Enc}_{pk}({v}_i)$, and issues it to the PIR chaincode through \textsf{PIRQuery}. 
+Endorsing peers, acting as Data Owners ($\mathcal{DO}$), perform homomorphic evaluation against the stored polynomial to return $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})$. 
+Finally, the $\mathcal{DR}$ decrypts $ct_r$ using its secret key $sk$ to recover $d_i=\mathsf{Dec}_{sk}(ct_r)$ and reconstructs the original JSON object. 
+Throughout this workflow, only opaque ciphertexts and metadata are visible to $\mathcal{DO}$, ensuring that the queried index remains hidden.
+
+\begin{enumerate}
+    \item \textbf{DW submits initialization.}  
+    $\mathcal{DW}$ calls \textsf{InitLedger} via $\mathcal{GW}$ (\textsf{submit}) with inputs $(n, record_{s,\mathcal{DW}})$ and an optional hint $(\log N,\log Q_i,\log P_i,T)$, where $record_{s,\mathcal{DW}}$ reflects the maximum JSON size anticipated by the writer.
+
+    \item \textbf{DO validates and derives parameters.}  
+    $\mathcal{DO}$ computes a provisional slot allocation $record_{s,\mathcal{GW}} = 8 \cdot \lceil record_{s,\mathcal{DW}} / 8 \rceil$.  
+    If $\log N$ is absent, the smallest $\log N$ is chosen such that $\mathsf{Cap}(N,record_{s,\mathcal{GW}},n)$ holds.  
+    BGV parameters $\{\log N,N,\log Q_i,\log P_i,T\}$ are built and stored.
+
+    \item \textbf{DO prepares records.}  
+    Either ingest provided CTI records or synthesize $D=\{d_0,\dots,d_{n-1}\}$ with $|d_i|\le record_{s,\mathcal{DW}}$.
+
+    \item \textbf{Compute slot window.}  
+    Fix $record_s = 8 \cdot \lceil \max_i |d_i| / 8 \rceil$ (discrete policy).  
+
+    \item \textbf{Feasibility check.}  
+    Reject if any predicate fails:  
+    $\mathsf{Min}(\log N,record_s)$, $\mathsf{Disc}(record_s)$, $\mathsf{Cap}(N,record_s,n)$.
+
+    \item \textbf{Pack to coefficient vector.}  
+    Assign each $d_i$ to a disjoint slot window $J_i=\{i\cdot record_s,\dots,(i+1)record_s-1\}$ in $c=(c_0,\dots,c_{N-1})$; pad with zeros.
+
+    \item \textbf{Encode polynomial and persist.}  
+    Encode $m_{\mathrm{DB}}(X)=\sum_{j=0}^{N-1} c_j X^j \in \mathbb{Z}_T[X]/(X^N+1)$ at max level.  
+    Persist to world state under keys \texttt{"m\_DB"}, \texttt{"n"}, \texttt{"record\_s"}, and \texttt{"bgv\_params"} $=\{\log N,N,\log Q_i,\log P_i,T\}$, plus optional \texttt{"record\%03d"} entries.
+
+    \item \textbf{DR discovers metadata.}  
+    $\mathcal{DR}$ invokes \textsf{GetMetadata} (\textsf{evaluate}).  
+    $\mathcal{DO}$ returns $(n,record_s,\log N,N,T,\log Q_i,\log P_i)$.
+
+    \item \textbf{DR instantiates crypto context.}  
+    From metadata, $\mathcal{DR}$ builds parameters, runs $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$, and prepares encoder/encryptor.
+
+    \item \textbf{Form the windowed selector.}  
+    For index $i\in[n]$, define the window $J_i=\{i\cdot record_s,\dots,(i+1)\cdot record_s-1\}$.  
+    Build ${v}_i\in\{0,1\}^{N}$ with ones on $J_i$ and zeros elsewhere.
+
+    \item \textbf{Encode and encrypt the query.}  
+    Encode ${v}_i$ as $m_q(X)=\sum_{j=0}^{N-1} ({v}_i)_j X^j$ and encrypt $ct_q=\mathsf{Enc}_{pk}({v}_i)$.  
+    Serialize and Base64-encode the ciphertext.
+
+    \item \textbf{DR issues PIR query.}  
+    $\mathcal{DR}$ calls \textsf{PIRQuery}(\texttt{encQueryB64}) via $\mathcal{GW}$ (\textsf{evaluate}).
+
+    \item \textbf{DO evaluates homomorphically.}  
+    $\mathcal{DO}$ decodes $ct_q$, ensures $m_{\mathrm{DB}}$ is loaded from world state, and computes $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})$ (ciphertext–plaintext multiply).  
+    The result is serialized and Base64-encoded for return.
+
+    \item \textbf{DR decrypts the response.}  
+    $\mathcal{DR}$ decodes and decrypts $ct_r$ to $m'(X)$, decodes slots, and extracts bytes on $J_i$.
+
+    \item \textbf{Reconstruction and validation.}  
+    Trim at padding zero, decode UTF-8, validate JSON, and output $d_i$.  
+    If $record_s=1$, return the scalar value directly.
+\end{enumerate}
+
+
+
+\begin{algorithm}[t]
+    \caption{InitLedger (chaincode)}
+    \label{alg:initledger}
+    \begin{algorithmic}[1]
+    \REQUIRE $n \in \mathbb{N}$; $record_s^{\mathcal{DW}} \in \{0;1\}^{\ast}$; op: $\mathrm{hint}$
+    \STATE $\log N \leftarrow \selMinLogN{\!\left(n,\,8 \cdot \left\lceil \tfrac{record_s^{\mathcal{DW}}}{8} \right\rceil\right)}$
+    \IF {$\log N=\varnothing$} 
+        \STATE \textbf{return} $\bot$ 
+    \ENDIF
+    \STATE $bgvParams \gets \selParams{(\log N,\, op:\mathrm{hint})}$
+    \STATE $D \gets \genRecords{(n,\,record_s^{\mathcal{DW}})}$
+    \IF {$\exists i:\ |d_i|>record_s^{\mathcal{DW}}$} 
+        \STATE \textbf{return} $\bot$ 
+    \ENDIF
+    \STATE $record_s \gets 8 \cdot \left\lceil \dfrac{\max_i |d_i|}{8} \right\rceil$
+    \IF{$\neg \feasible{\log N,n,record_s}$} 
+        \STATE \textbf{return} $\bot$ // infeasible configuration
+    \ENDIF
+
+    \STATE $c \gets [0,\dots,0] \in \mathbb{Z}_T^N$ \hfill // init coefficient vector
+\FOR{$i \in [0,n-1]$}
+    \STATE $J_i \gets \{i\cdot record_s,\dots,(i+1)\cdot record_s-1\}$ \hfill // slot window for $d_i$
+    \FOR{$k=0$ \TO $record_s-1$}
+        \IF{$k < |d_i|$}
+            \STATE $c[J_i[k]] \gets \textsf{byte}(d_i[k])$ \hfill // copy byte of record
+        \ELSE
+            \STATE $c[J_i[k]] \gets 0$ \hfill // padding
+        \ENDIF
+    \ENDFOR
+\ENDFOR
+
+    \STATE $m_{\mathrm{DB}}(X) \gets \encP{c} \in \mathbb{Z}_T[X]/(X^N+1)$
+    \STATE $worldState \gets \{m_{\mathrm{DB}},\;n,\;record_s,\;bgvParams,\;op:D\}$
+    \STATE \textbf{return} \textsc{ok}
+    \end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+    \caption{GetMetadata (chaincode)}
+    \label{alg:getmetadata}
+    \begin{algorithmic}[1]
+    \REQUIRE $\varnothing$
+    \STATE $n \gets worldState.n$
+    \STATE $record_s \gets worldState.record_s$
+    \STATE $paramsMeta \gets worldState.bgvParams$
+    \IF{$n=\varnothing \;\lor\; record_s=\varnothing \;\lor\; paramsMeta=\varnothing$}
+    \STATE \textbf{return} $\bot$
+    \ENDIF
+
+    \STATE $paramsMeta=(\log N, N, \log Q_i[], \log P_i[], T)$
+    \STATE $metadata \gets (n, record_s, paramsMeta)$
+    \STATE \textbf{return} $metadata$
+    \end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+    \caption{FormSelectionVector (client)}
+    \label{alg:encryptquery}
+    \begin{algorithmic}[1]
+    \REQUIRE $pk$; $i\in[n]$; $record_s$; $N$
+    \IF{$i<0 \;\lor\; i\ge n$} \STATE \textbf{return} $\bot$ \ENDIF
+    \IF{$n\cdot record_s > N$} \STATE \textbf{return} $\bot$ \ENDIF
+    \STATE $J_i \gets \{i\cdot record_s,\dots,(i+1)\cdot record_s-1\}$
+    \STATE ${v}_i \in \{0,1\}^{N} \gets \mathbf{0}$
+    \FOR{$j \in J_i$} \STATE ${v}_i[j] \gets 1$ \ENDFOR \hfill // windowed selector
+    \STATE $m_q(X) \gets \encP{{v}_i}$ \hfill // polynomial encode at max level
+    \STATE $ct_q \gets \mathsf{Enc}_{pk}(m_q)$
+    \STATE $ct_q^{B64} \gets \encB{\ser{ct_q}}$
+    \STATE \textbf{return } $ct_q^{B64}$ \hfill // Base64(marshalled ciphertext)
+    \end{algorithmic}
+\end{algorithm}
+    
+\begin{algorithm}[t]
+    \caption{PIRQuery (chaincode)}
+    \label{alg:pirquery}
+    \begin{algorithmic}[1]
+    \REQUIRE $ct_q^{B64}$
+    \IF{$ct_q^{B64} = \varnothing$} 
+        \STATE \textbf{return} $\bot$ 
+    \ENDIF
+    \STATE $ct_q \gets \des{\decB{(ct_q^{B64})}}$
+    \IF{$m_{\mathrm{DB}}$ not cached in memory}
+        \STATE $m_{\mathrm{DB}} \gets worldState.m_{\mathrm{DB}}$
+    \ENDIF
+    \STATE $ct_r \gets \mathsf{Eval}(ct_q, m_{\mathrm{DB}})$
+    \STATE $ct_r^{B64} \gets \encB{\ser{(ct_r)}}$
+    \STATE \textbf{return} $ct_r^{B64}$
+    \end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[!h]
+    \caption{DecryptResult (client)}
+    \label{alg:decryptresult}
+    \begin{algorithmic}[1]
+    \REQUIRE $ct_r^{B64}$; $sk$; $i\in[n]$; $record_s$; $n$
+    \STATE \textbf{if } $i<0$ \textbf{ or } $i\ge n$ \textbf{ then return } $\bot$
+    \STATE \textbf{if } $n\cdot record_s > N$ \textbf{ then return } $\bot$ \hfill // sanity
+    \STATE $ct_r \leftarrow \des{\decB{(ct_r^{B64})}}$
+    \STATE $u \in \mathbb{Z}_T^{N} \leftarrow \decP{\,m'(X)\,} \leftarrow \mathsf{Dec}_{sk}(ct_r)$
+    \STATE $J_i \leftarrow \{i\cdot record_s,\dots,(i+1)\cdot record_s-1\}$
+    \STATE $b \leftarrow$ byte array // init empty buffer for record
+    \FOR{$j \in J_i$}
+        \IF{$u[j]=0$} \STATE \textbf{break} \ENDIF \hfill // stop at padding zero
+        \STATE $b.\mathsf{append}(u[j])$ 
+    \ENDFOR
+    \STATE \textbf{if } {$record_s=1$} \textbf{ then return } $u[i\cdot record_s]$
+    \STATE $d_i \leftarrow {dec^{UTF8}}(b)$ 
+    \STATE \textbf{return } $d_i$
+    \end{algorithmic}
+\end{algorithm}
+    
+    
+
+\noindent\textit{Remark (levels, noise, determinism).}
+Queries are encoded and encrypted at \emph{max level}. Chaincode evaluates a single ct–pt multiply (no relinearization).
+This keeps noise growth minimal and evaluation deterministic across endorsers, which is important for Fabric endorsement.
+If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns the same metadata blob; clients rebuild context idempotently.
+
 
 
 

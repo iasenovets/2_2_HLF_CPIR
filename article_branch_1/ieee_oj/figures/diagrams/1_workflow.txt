@@ -9,181 +9,190 @@ autonumber
 
 title CPIR-Enabled Private Retrieval Workflow in Hyperledger Fabric
 
-actor "Data Writer (DW)" as OrgA
-actor "Data Requester (DR)" as OrgB
-participant "Gateway (GW)" as CC
+actor "Data Writer (DW)" as DW
+actor "Data Requester (DR)" as DR
+participant "Gateway (GW)" as GW
+participant "Data Owner (DO)" as DO
 database "World State (WS)" as WS
 
 == Ledger Initialization (submit) ==
-OrgA -> CC : Submit InitLedger(n, maxJSON,\nlogN?, logQi?, logPi?, t?)
-activate CC
+DW -> GW : Submit InitLedger(n, maxJSON,\nlogN?, logQi?, logPi?, t?)
+GW -> DO : InitLedger(...)
+activate DO
 
-CC -> CC : parseArgs()
+DO -> DO : parseArgs()
 note right
 <math>n > 0</math>, <math>maxJSON > 0</math> \\
 Optional: <math>logN, logQi, log"Pi", t</math>
 end note
 
-CC -> CC : s_guess := 8 · ceil(maxJSON / 8)
+DO -> DO : s_guess := 8 · ceil(maxJSON / 8)
 note right
 Slot policy <math>S = 8·N</math> \\
 Lower bound <math>"record"_s ≥ s_"guess"</math>
 end note
 
 alt logN missing
-  CC -> CC : logN := ChooseLogN(n, s_guess)
+  DO -> DO : logN := ChooseLogN(n, s_guess)
   note right
   Feasibility: pick smallest <math>logN</math> s.t. \\
   <math>N = 2^{logN}, n·"record"_s ≤ N</math>
   end note
 else logN provided
-  CC -> CC : validate logN, logQi, logPi, t
+  DO -> DO : validate logN, logQi, logPi, t
 end
 
-CC -> CC : params := BuildParamsFromHint(logN, logQi, logPi, t)
+DO -> DO : params := BuildParamsFromHint(logN, logQi, logPi, t)
 note right
 BGV params: <math>(N = 2^{logN}, q, t)</math> \\
 Store literal <math>{logN, N, logQi, log"Pi", t}</math>
 end note
 
-CC -> CC : records := GenerateRecords(n, logN, maxJSON)
+DO -> DO : records := GenerateRecords(n, logN, maxJSON)
 note right
 Synthesize CTI JSON with \\
 <math>|"record"_i| ≤ maxJSON</math> bytes
 end note
 
 loop i = 0..n-1
-  CC -> WS : PutState("record%03d", record_i)
+  DO -> WS : PutState("record%03d", record_i)
 end
 
-CC -> CC : record_s := CalcSlotsPerRec(records)
+DO -> DO : record_s := CalcSlotsPerRec(records)
 note right
 <math>"record"_s = 8 · ceil("max"_i |"record"_i| / 8)</math>
 end note
 
-CC -> CC : checkCapacity()
+DO -> DO : checkCapacity()
 note right
 Reject if <math>n · "record"_s > N</math>
 end note
 
-CC -> CC : packBytesToVector c[0..N-1]
+DO -> DO : packBytesToVector c[0..N-1]
 note right
 Disjoint windows in <math>c = (c_0,…,c_{N-1})</math> \\
 Record i → slots <math>{i·"record"_s,…,(i+1)·"record"_s-1}</math>
 end note
 
-CC -> CC : m_DB := Encode(c) at MaxLevel
+DO -> DO : m_DB := Encode(c) at MaxLevel
 note right
 <math>m_DB(X) = ∑_{j=0}^{N-1} c_j X^j ∈ Z_t[X]/(X^N+1)</math>
 end note
 
-CC -> WS : PutState("m_DB", marshal(m_DB)) 
-CC -> WS : PutState("n", n)
-CC -> WS : PutState("record_s", record_s)
-CC -> WS : PutState("bgv_params",{logN, N, logQi, logPi, t})
+DO -> WS : PutState("m_DB", marshal(m_DB)) 
+DO -> WS : PutState("n", n)
+DO -> WS : PutState("record_s", record_s)
+DO -> WS : PutState("bgv_params",{logN, N, logQi, logPi, t})
+deactivate DO
 
 == Metadata Discovery (evaluate) ==
-OrgB -> CC : Evaluate GetMetadata()
-activate CC
+DR -> GW : Evaluate GetMetadata()
+GW -> DO : GetMetadata()
+activate DO
 
-CC -> WS : GetState("n")
+DO -> WS : GetState("n")
 note right
 Load <math>n</math>: number of records
 end note
 
-CC -> WS : GetState("record_s")
+DO -> WS : GetState("record_s")
 note right
 Load <math>"record"_s</math>: slots per record window
 end note
 
-CC -> WS : GetState("bgv_params")
+DO -> WS : GetState("bgv_params")
 note right
 Load BGV parameters: \\
 <math>\{logN, N, logQi, log"Pi", t\}</math>
 end note
 
-CC -> CC : Construct JSON blob
+DO -> GW : metadata JSON
 note right
 <math>"metadata" = (n, "record"_s, logN, N, t, logQi[], log"Pi"[])</math>
 end note
-
-CC --> OrgB : metadata JSON
-deactivate CC
+deactivate DO
+GW --> DR : metadata JSON
 
 == Private Information Retrieval ==
 group Client-Side Preparation
-  OrgB -> OrgB : makeSelectionVector(i, n, record_s, N)
+  DR -> DR : makeSelectionVector(i, n, record_s, N)
+activate DR
   note right
-  Window <math>{i·"record"_s,…,(i+1)·"record"_s-1}</math> \\
-  Build <math>v ∈ {0,1}^N</math> with ones on the window.
+  Window <math>{i·"record"_s,…,(i+1)·"record"_s-1}</math>
+  Build <math>v ∈ {0,1}^N</math> with ones on the window
   end note
 
-  OrgB -> OrgB : encodeVectorToPolynomial()
+  DR -> DR : encodeVectorToPolynomial()
   note right
   <math>m_q(X) = ∑_{j=0}^{N-1} v_j X^j</math>
   end note
 
-  OrgB -> OrgB : encryptPolynomial(pk)
+  DR -> DR : encryptPolynomial(pk)
   note right
   <math>ct_q = Enc_{pk}(m_q)</math>
   end note
 
-  OrgB -> OrgB : marshalBinary → ctBytes[]
-  OrgB -> OrgB : b64Encode → encQueryB64
+  DR -> DR : marshalBinary → ctBytes[]
+  DR -> DR : b64Encode → encQueryB64
 end
+deactivate DR
 
-OrgB -> CC : Evaluate PIRQuery(encQueryB64)
-activate CC
+DR -> GW : Evaluate PIRQuery(encQueryB64)
+GW -> DO : PIRQuery(encQueryB64)
+activate DO
 
-CC -> CC : validate non-empty(encQueryB64)
-
+DO -> DO : validate non-empty(encQueryB64)
 alt lazy-load m_DB
-  CC -> WS : GetState("m_DB")
-  CC -> CC : unmarshal m_DB → plaintext at MaxLevel
+  DO -> WS : GetState("m_DB")
+  DO -> DO : unmarshal m_DB → plaintext at MaxLevel
   note right
   <math>m_(DB) ∈ Z_t[X]/(X^N+1)</math>
   end note
 end
 
-CC -> CC : base64 decode → ctBytes[]
-CC -> CC : unmarshalBinary → ct_q
+DO -> DO : base64 decode → ctBytes[]
+DO -> DO : unmarshalBinary → ct_q
 note right
 <math>ct_q</math> has degree 1, level = MaxLevel
 end note
 
-CC -> CC : homomorphicEval
+DO -> DO : homomorphicEval
 note right
 Evaluator mul: <math>ct_r = ct_q ⊗ m_(DB)</math> \\
 Semantic: <math>ct_r = Enc(v · m_(DB))</math>
 end note
 
-CC -> CC : marshalBinary → ctResultBytes[]
-CC -> CC : b64Encode → encResultB64
-CC --> OrgB : encResultB64
-deactivate CC
+DO -> DO : marshalBinary → ctResultBytes[]
+DO -> DO : b64Encode → encResultB64
+DO --> GW : encResultB64
+deactivate DO
+GW --> DR : encResultB64
 
 == Local Decryption and Reconstruction ==
 group Client-Side Post-Processing
-  OrgB -> OrgB : b64Decode(encResultB64) → ctResultBytes[]
-  OrgB -> OrgB : unmarshalBinary() → ct_r
-  OrgB -> OrgB : decryptCt(sk)
+
+  DR -> DR : b64Decode(encResultB64) → ctResultBytes[]
+  activate DR
+  DR -> DR : unmarshalBinary() → ct_r
+  DR -> DR : decryptCt(sk)
   note right
   <math>m'(X) = Dec_{sk}(ct_r)</math> \\
   Decode slots → vector <math>(m'_0,…,m'_{N-1})</math>
   end note
 
-  OrgB -> OrgB : extractWindow(i, record_s)
+  DR -> DR : extractWindow(i, record_s)
   note right
   Index set <math>J = {i·"record"_s,…,(i+1)·"record"_s-1}</math> \\
   Collect bytes <math>u = (m'_j)_{j∈J}</math>, stop at padding 0
   end note
 
-  OrgB -> OrgB : decodeUTF8(u)
+  DR -> DR : decodeUTF8(u)
   note right
   Parse JSON string <math>buf</math> \\
   Validate <math>json.Valid(buf) = true</math>
   end note
 
-  OrgB -> OrgB : return Decoded {JSONString or IntValue}
+  DR -> DR : return Decoded {JSONString or IntValue}
+  deactivate DR
 end
 @enduml
