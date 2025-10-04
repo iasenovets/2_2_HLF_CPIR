@@ -19,9 +19,9 @@ import matplotlib.pyplot as plt
 # ---------- CLI ----------
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--indir", default="data", help="input folder with CSVs")
-    p.add_argument("--outdir", default="figures", help="output folder for figures and summary")
-    p.add_argument("--png_dpi", type=int, default=300, help="PNG resolution")
+    p.add_argument("--data", default="data", help="input folder with CSVs")
+    p.add_argument("--figdir", default="figures", help="output folder for figures and summary")
+    p.add_argument("--dpi", type=int, default=300, help="PNG resolution")
     return p.parse_args()
 
 # ---------- Constants ----------
@@ -51,11 +51,11 @@ def ieee_figsize_single_column(aspect=0.7):
 # ---------- Main ----------
 def main():
     args = parse_args()
-    os.makedirs(args.outdir, exist_ok=True)
+    os.makedirs(args.figdir, exist_ok=True)
 
-    csv_paths = sorted(glob.glob(os.path.join(args.indir, "e2elatency_*.csv")))
+    csv_paths = sorted(glob.glob(os.path.join(args.data, "e2elatency_*.csv")))
     if not csv_paths:
-        raise SystemExit(f"No CSVs found in {args.indir}")
+        raise SystemExit(f"No CSVs found in {args.data}")
 
     series_list, summary_rows = [], []
 
@@ -84,7 +84,7 @@ def main():
 
     series_list.sort(key=lambda d: d["logN"])
     summary_df = pd.DataFrame(summary_rows).sort_values(["logN", "record_s"])
-    summary_csv = os.path.join(args.outdir, "e2e_latency_summary.csv")
+    summary_csv = os.path.join(args.figdir, "e2e_latency_summary.csv")
     summary_df.to_csv(summary_csv, index=False)
 
         # ---------- Plot ----------
@@ -139,10 +139,10 @@ def main():
     fig.tight_layout()
 
 
-    pdf_path = os.path.join(args.outdir, "e2e_latency_stacked.pdf")
-    png_path = os.path.join(args.outdir, "e2e_latency_stacked.png")
+    pdf_path = os.path.join(args.figdir, "e2e_latency_stacked.pdf")
+    png_path = os.path.join(args.figdir, "e2e_latency_stacked.png")
     fig.savefig(pdf_path, bbox_inches="tight")
-    fig.savefig(png_path, dpi=args.png_dpi, bbox_inches="tight")
+    fig.savefig(png_path, dpi=args.dpi, bbox_inches="tight")
 
     print(f"[OK] Wrote {pdf_path}")
     print(f"[OK] Wrote {png_path}")

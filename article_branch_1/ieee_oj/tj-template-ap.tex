@@ -774,7 +774,7 @@ slot allocation $record_s$, number of records $n$, and selector type.
     \end{tabular}
 \end{table}
 
-\noindent\textbf{End-to-End Latency by Stage.}
+\textbf{a) End-to-End Latency by Stage.}
 Figure~\ref{fig:latency-stages} shows the latency breakdown per cryptographic stage:
 \emph{KeyGen} (parameter generation and keypair creation), 
 \emph{Enc} (selector encoding and encryption), 
@@ -782,13 +782,26 @@ Figure~\ref{fig:latency-stages} shows the latency breakdown per cryptographic st
 and \emph{Dec} (decryption and record reconstruction). 
 Each bar represents the average latency for one query at a given $\log N$.
 
-\begin{figure}[!t]
+\begin{figure}[!h]
     \centering
     \includegraphics[width=\columnwidth]{figures/plots/e2e_latency_stacked.pdf}
     \caption{End-to-end single-query latency by stage; ct×pt path.}
     \label{fig:latency-stages}
 \end{figure}
-    
+
+\textbf{b) Artifact Size Analysis.}
+Figure~\ref{fig:artifact-sizes} reports the serialized size (in kb) of cryptographic artifacts: 
+public/secret keys, encrypted selector $ct_q$, encrypted response $ct_r$, 
+database polynomial $m_{\mathrm{DB}}$, and metadata JSON. 
+Base64 encoding adds roughly $33\%$ wire overhead.
+
+\begin{figure}[!h]
+\centering
+\includegraphics[width=\columnwidth]{figures/plots/artifacts_sizes.pdf}
+\caption{Size of main cryptographic artifacts.}
+\label{fig:artifact-sizes}
+\end{figure}
+
 
 
 

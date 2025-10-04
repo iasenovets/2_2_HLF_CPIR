@@ -104,13 +104,6 @@ func (ls *LedgerState) invoke(w http.ResponseWriter, r *http.Request) {
 	case "GetMetadata":
 		ls.getMetadata(w)
 
-	case "PublicQuery":
-		if len(req.Args) != 1 {
-			utils.WriteErr(w, fmt.Errorf("arg 0 = key (e.g., record000)"))
-			return
-		}
-		ls.publicQuery(w, req.Args[0])
-
 	case "PIRQuery":
 		if len(req.Args) != 1 {
 			utils.WriteErr(w, fmt.Errorf("need encQueryB64"))
@@ -122,6 +115,32 @@ func (ls *LedgerState) invoke(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		utils.WriteOK(w, outB64)
+
+	// helper cases
+	case "PublicQuery":
+		if len(req.Args) != 1 {
+			utils.WriteErr(w, fmt.Errorf("arg 0 = key (e.g., record000)"))
+			return
+		}
+		ls.publicQuery(w, req.Args[0])
+
+	case "GetMDBSize":
+		// returns the serialized size (bytes) of plaintext m_DB
+		ls.mtx.RLock()
+		if ls.m_DB == nil {
+			ls.mtx.RUnlock()
+			utils.WriteErr(w, fmt.Errorf("m_DB not initialized"))
+			return
+		}
+		pt := ls.m_DB
+		ls.mtx.RUnlock()
+
+		data, err := pt.MarshalBinary()
+		if err != nil {
+			utils.WriteErr(w, fmt.Errorf("marshal m_DB: %w", err))
+			return
+		}
+		utils.WriteOK(w, fmt.Sprintf("%d", len(data)))
 
 	default:
 		utils.WriteErr(w, fmt.Errorf("unknown method"))
@@ -273,22 +292,6 @@ func (ls *LedgerState) getMetadata(w http.ResponseWriter) {
 	utils.WriteOK(w, string(out))
 }
 
-func (ls *LedgerState) publicQuery(w http.ResponseWriter, key string) {
-	idx, err := strconv.Atoi(key[len(key)-3:])
-	if err != nil || idx < 0 {
-		utils.WriteErr(w, fmt.Errorf("invalid record index from key %q", key))
-		return
-	}
-
-	ls.mtx.RLock()
-	defer ls.mtx.RUnlock()
-	if idx >= len(ls.records) {
-		utils.WriteErr(w, fmt.Errorf("not found"))
-		return
-	}
-	utils.WriteOK(w, string(ls.records[idx]))
-}
-
 func (ls *LedgerState) pirQuery(encQueryB64 string) (string, error) {
 	ls.mtx.RLock()
 	defer ls.mtx.RUnlock()
@@ -335,6 +338,22 @@ func (ls *LedgerState) pirQuery(encQueryB64 string) (string, error) {
 	log.Printf("[EVAL] Result ciphertext size = %d bytes", len(outBytes))
 
 	return base64.StdEncoding.EncodeToString(outBytes), nil
+}
+
+func (ls *LedgerState) publicQuery(w http.ResponseWriter, key string) {
+	idx, err := strconv.Atoi(key[len(key)-3:])
+	if err != nil || idx < 0 {
+		utils.WriteErr(w, fmt.Errorf("invalid record index from key %q", key))
+		return
+	}
+
+	ls.mtx.RLock()
+	defer ls.mtx.RUnlock()
+	if idx >= len(ls.records) {
+		utils.WriteErr(w, fmt.Errorf("not found"))
+		return
+	}
+	utils.WriteOK(w, string(ls.records[idx]))
 }
 
 /********* MAIN ***************************************************/
