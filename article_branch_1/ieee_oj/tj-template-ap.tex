@@ -802,6 +802,19 @@ Base64 encoding adds roughly $33\%$ wire overhead.
 \label{fig:artifact-sizes}
 \end{figure}
 
+\textbf{c) Utilization.}
+Figure~\ref{fig:scaling} shows end-to-end latency as a function of $record_s$ 
+for $\log N \in \{13,14,15\}$. 
+Utilization $u=(n \cdot record_s)/N$ quantifies slot occupancy, 
+highlighting feasible operating regions under the constraints of Fig.~\ref{fig:exp-matrix}.
+
+\begin{figure}[!h]
+\centering
+\includegraphics[width=\columnwidth]{figures/plots/scaling_util_utilization_stacked.pdf}
+\caption{Scaling of query latency with slot window $record_s$ and utilization $u=(n\cdot record_s)/N$.}
+\label{fig:scaling}
+\end{figure}
+
 
 
 
