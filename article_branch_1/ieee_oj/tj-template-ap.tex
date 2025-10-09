@@ -303,7 +303,10 @@ Extending to ciphertext–ciphertext evaluation would require additional on-chai
 (relinearization keys, Galois keys, encrypted $m_{\mathrm{DB}}$), larger world-state footprint, and higher evaluation cost, 
 which we leave as future work.
     
-\section{PROPOSED SYSTEM}
+\section{PROPOSED SYSTEM}\label{sec:proposed_system}
+The following subsections detail (i) the system and threat models, (ii) a system overview, 
+(iii) the polynomial database construction, (iv) feasibility constraints for parameter selection, 
+(v) multi-channel architecture, (vi) workflow details and main 5 algorithms.
 
 \subsection{SYSTEM MODEL}
 We introduce a blockchain-based query privacy system designed for permissioned ledgers. 
@@ -544,25 +547,31 @@ The world state contains:
     \end{itemize}
 \end{itemize}
 
-\noindent\textit{Remark (ledger capacity).} 
+\noindent\textit{Remark (ledger capacity).}
 A practical concern is the maximum size of the ledger when channels store both JSON records and the polynomial $m_{\mathrm{DB}}$. 
-In Hyperledger Fabric, two layers impose constraints:
+In Hyperledger Fabric, two layers impose size-related limits: the \emph{world state} (LevelDB or CouchDB) and the \emph{blockchain history} managed by the ordering service.
 
-\textbf{a) World state (LevelDB/CouchDB).} 
-Fabric does not set a fixed cap on the number of records $n$; limits are determined by disk capacity and I/O throughput. 
-CouchDB enforces a configurable \texttt{max\_document\_size}, which applies to large values such as $m_{\mathrm{DB}}$. 
-Our construction stores $m_{\mathrm{DB}}$ as a single world-state entry, plus metadata (\texttt{"n"}, \texttt{"record\_s"}, \texttt{"bgv\_params"}) and optional JSON records (\texttt{"record\%03d"}). 
-Feasibility is therefore governed primarily by the size of $m_{\mathrm{DB}}$ and by the slot constraints in Fig.~\ref{fig:exp-matrix}, not by Fabric itself.
+\textbf{a) World state (LevelDB/CouchDB).}
+Fabric imposes no hard limit on the number of key–value entries in world state; capacity depends on available disk space and peer I/O throughput.
+In our implementation, each channel maintains a few small keys:
+\texttt{"m\_DB"} (64–265~KB), \texttt{"n"}, \texttt{"record\_s"}, \texttt{"bgv\_params"}, and optional \texttt{"record\%03d"} JSON records.
+These sizes are well within the default LevelDB storage profile, which is optimized for high-speed local key–value operations.
+Although CouchDB can be used as an alternative (for rich JSON queries), it enforces a configurable \texttt{max\_document\_size} limit of 8~MB by default (up to 4~GB in recent versions of CouchDB~3.0+).
+Since our $m_{\mathrm{DB}}$ values are below 300~KB, LevelDB is sufficient and preferable for performance and simplicity, while CouchDB remains compatible for future extensions that require JSON-based indexing.
 
-\textbf{b) Ledger history (blockchain log).} 
-Block size is limited by ordering-service parameters (\texttt{AbsoluteMaxBytes}, \texttt{PreferredMaxBytes}). 
-However, PIR queries are executed during the \textsf{evaluate} phase and do not produce blocks. 
-Only \textsf{submit} transactions (e.g., \textsf{InitLedger} or record updates) contribute to block payloads. 
-Thus block size limits are relevant only when initializing or refreshing $m_{\mathrm{DB}}$, not during PIR queries.
+\textbf{b) Ledger history (blockchain log).}
+Block size is constrained by the ordering service configuration. 
+By default, the Fabric orderer limits the serialized payload to \texttt{AbsoluteMaxBytes~=~10~MB} (recommended under 49~MB given the gRPC ceiling of 100~MB), 
+and typically aggregates up to \texttt{MaxMessageCount~=~500} transactions per block or \texttt{PreferredMaxBytes~=~2~MB}.
+In our system, these limits affect only \textsf{submit} transactions such as \textsf{InitLedger} or record updates. 
+\textsf{Evaluate} transactions (including \textsf{PIRQuery}) are read-only and do not generate blocks, thus unaffected by ordering or batching constraints.
 
-\noindent\textbf{Implication.} 
-The effective capacity of a channel is determined by cryptographic feasibility (\S\ref{fig:exp-matrix}) and the maximum size of a single world-state value, rather than by Fabric’s block size. 
-For very large CTI objects, a common extension is to store them off-chain (e.g., in IPFS) and persist only their content identifiers (CIDs) in world state, while $m_{\mathrm{DB}}$ continues to support private retrieval of the structured fields.
+\noindent\textbf{Implication.}
+The effective capacity of a channel is governed primarily by cryptographic feasibility (Fig.~\ref{fig:exp-matrix}) 
+and the size of a single world-state value (i.e., $m_{\mathrm{DB}}$), rather than by Fabric’s block or database limits. 
+For large or binary CTI objects (e.g., malware samples or full PCAPs), an optional extension is to store them off-chain in IPFS 
+while persisting only their content identifiers (CIDs) in world state, 
+keeping the polynomial $m_{\mathrm{DB}}$ as the structured component used for private retrieval.
 
 \subsection{WORKFLOW DETAILS}
 
@@ -744,79 +753,195 @@ If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns th
 
 
 \section{PERFORMANCE EVALUATION}
+The following subsections detail (i) experimental setup and cryptographic benchmarks, 
+(ii) fabric integration becnhmarks, 
+(iii) discussion and comparison with related work.
 
-\subsection{Experimental Setup}
-All experiments were conducted on a dedicated host with an Intel~i7 CPU, 32~GB RAM, and Ubuntu~22.04. 
-The implementation uses Go~1.22, Lattigo~v6, and Hyperledger Fabric~v2.5 with CouchDB as the world-state database. 
-Each Fabric channel (\texttt{channel\_mini}, \texttt{channel\_mid}, \texttt{channel\_rich}) runs an independent CPIR chaincode instance.
-Unless otherwise stated, each measurement is averaged over 20 runs with cold and warm world-state cache conditions.
-Evaluate transactions are read-only and do not generate blocks; only \textsf{InitLedger} is submitted through the consensus path.
+\subsection{EXPERIMENTAL SETUP}
 
-\subsection{Cryptographic Evaluation}
+All experiments were executed on a local Ubuntu~24.04 host running under WSL2 on an Intel~Core~i5-3380M~CPU 
+(2~cores/4~threads, 2.90~GHz) with 7.7~GB of RAM and a 1~TB~SSD. 
+During evaluation, the average available memory was 6.9~GB with a 2~GB swap partition, 
+and the root filesystem reported 946~GB of free space.
+
+The software stack consisted of Go~1.24.1, Docker~27.4.0, and Docker~Compose~v2.31.0, 
+hosting Hyperledger~Fabric~v2.5 with a single Raft orderer and LevelDB as the world-state database. 
+Fabric’s ordering service used the recommended parameters 
+(\texttt{BatchSize.AbsoluteMaxBytes}=99~MB, \texttt{PreferredMaxBytes}=2~MB per block).
+
+Our implementation employs the \textit{Lattigo}~v6 library~\cite{lattigo2024} as the homomorphic encryption backend. 
+Lattigo provides a Go-native implementation of the Brakerski–Gentry–Vaikuntanathan (BGV) scheme~\cite{brakerski2014leveled},
+whose security and correctness have been validated in prior literature. 
+Accordingly, our focus is on evaluating its \emph{practical performance within a permissioned blockchain environment}.
+
+Client–peer communication was performed through the Fabric~Go~SDK (Gateway API). 
+The network configuration comprised a single organization with one peer per channel, 
+sufficient for privacy evaluation since PIR execution occurs solely at endorsing peers 
+and ordering nodes do not access the world state. 
+Unless otherwise stated, each reported value represents the mean of 20~executions under both cold and warm cache conditions, 
+cross-verified against peer logs for consistency.
+
+\subsection{CRYPTOGRAPHIC PERFORMANCE}
 
 \noindent\textbf{Parameter Configuration.}
 Table~\ref{tab:params} lists the main cryptographic parameters used in the evaluation, 
 including the ring dimension $N$, modulus chain $(\log Q_i, \log P_i)$, plaintext modulus $T$, 
-slot allocation $record_s$, number of records $n$, and selector type.
+slot allocation $record_s$, number of records $n$, and selector type. 
 
 \begin{table}[!h]
-\caption{BGV Parameter Configuration per Channel}
-\label{tab:params}
-\centering
-    \begin{tabular}{|c|c|c|c|c|c|c|}
+    \caption{Default BGV Parameter Configuration per Channel}
+    \label{tab:params}
+    \centering
+    \begin{tabular}{|c|c|c|c|c|c|}
     \hline
-    Channel & $\log N$ & $N$ & $\log Q_i$ & $\log P_i$ & $T$ & $record_s$ \\
+    $N$ & $\log Q_i$ & $\log P_i$ & $T$ & $record_s$ & $n$  \\
     \hline
-    Mini & 13 & 8192 & [60,60,60,38] & [60] & 65537 & 128 \\
-    Mid & 14 & 16384 & [60,60,60,38] & [60] & 65537 & 224 \\
-    Rich & 15 & 32768 & [60,60,60,38] & [60] & 65537 & 256 \\
+    $2^{13}$ & [54] & [54] & 65537 & 128 & 64 \\
+    $2^{14}$ & [54] & [54] & 65537 & 224 & 73 \\
+    $2^{15}$ & [54] & [54] & 65537 & 256 & 128 \\
     \hline
     \end{tabular}
 \end{table}
 
-\textbf{a) End-to-End Latency by Stage.}
-Figure~\ref{fig:latency-stages} shows the latency breakdown per cryptographic stage:
-\emph{KeyGen} (parameter generation and keypair creation), 
-\emph{Enc} (selector encoding and encryption), 
-\emph{Eval} (ciphertext–plaintext multiplication), 
-and \emph{Dec} (decryption and record reconstruction). 
-Each bar represents the average latency for one query at a given $\log N$.
+
+\noindent \textbf{End-to-End Latency by Stage.} Figure~\ref{fig:latency-stages} presents the breakdown of single-query latency 
+across cryptographic operations for each ring size. 
+
+\noindent \textbf{Artifact Size Analysis.} Figure~\ref{fig:artifact-sizes} reports the serialized size (in kilobytes) 
+of the main cryptographic artifacts: the public and secret keys, the encrypted selector $ct_q$, the encrypted response $ct_r$,
+the plaintext database polynomial $m_{\mathrm{DB}}$, and the metadata JSON object.
+
+\noindent \textbf{Slot Utilization.}Figure~\ref{fig:scaling} illustrates the proportion of utilized versus 
+unutilized slots across different ring sizes $N=2^{\log N}$.
+Utilization $u=(n \cdot record_s)/N$ measures how efficiently plaintext slots are 
+allocated within the polynomial database $m_{\mathrm{DB}}$.
 
 \begin{figure}[!h]
     \centering
     \includegraphics[width=\columnwidth]{figures/plots/e2e_latency_stacked.pdf}
-    \caption{End-to-end single-query latency by stage; ct×pt path.}
+    \caption{End-to-end single-query latency by stage; \texttt{ct×pt} path.}
     \label{fig:latency-stages}
 \end{figure}
 
-\textbf{b) Artifact Size Analysis.}
-Figure~\ref{fig:artifact-sizes} reports the serialized size (in kb) of cryptographic artifacts: 
-public/secret keys, encrypted selector $ct_q$, encrypted response $ct_r$, 
-database polynomial $m_{\mathrm{DB}}$, and metadata JSON. 
-Base64 encoding adds roughly $33\%$ wire overhead.
-
 \begin{figure}[!h]
-\centering
-\includegraphics[width=\columnwidth]{figures/plots/artifacts_sizes.pdf}
-\caption{Size of main cryptographic artifacts.}
-\label{fig:artifact-sizes}
+    \centering
+    \includegraphics[width=\columnwidth]{figures/plots/artifacts_sizes.pdf}
+    \caption{Size of main cryptographic artifacts.}
+    \label{fig:artifact-sizes}
 \end{figure}
 
-\textbf{c) Utilization.}
-Figure~\ref{fig:scaling} shows end-to-end latency as a function of $record_s$ 
-for $\log N \in \{13,14,15\}$. 
-Utilization $u=(n \cdot record_s)/N$ quantifies slot occupancy, 
-highlighting feasible operating regions under the constraints of Fig.~\ref{fig:exp-matrix}.
-
 \begin{figure}[!h]
-\centering
-\includegraphics[width=\columnwidth]{figures/plots/scaling_util_utilization_stacked.pdf}
-\caption{Scaling of query latency with slot window $record_s$ and utilization $u=(n\cdot record_s)/N$.}
-\label{fig:scaling}
+    \centering
+    \includegraphics[width=\columnwidth]{figures/plots/scaling_util_utilization_stacked.pdf}
+    \caption{Allocated-slot utilization by ring. Each bar shows the fraction of utilized versus unutilized slots in $m_{\mathrm{DB}}$.}
+    \label{fig:scaling}
 \end{figure}
 
+\noindent Having characterized the cryptographic performance of the BGV-based CPIR scheme 
+in isolation—covering latency, artifact size, and slot utilization—we now turn to its 
+\textbf{on-chain execution behavior within Hyperledger Fabric}. 
+The following subsection measures the performance of the chaincode functions 
+(\textsf{InitLedger}, \textsf{GetMetadata}, and \textsf{PIRQuery}) 
+across channels, focusing on peer-side latency, throughput, and world-state footprint.
 
+\subsection{BLOCKCHAIN PERFORMANCE}
 
+\begin{figure*}[!ht]
+    \centering
+    \includegraphics[width=\textwidth]{figures/plots/plate_wide3x2.pdf}
+    \caption{$m_{\mathrm{DB}}$ construction from JSON to plaintext polynomial. 
+    Each record is serialized to bytes, mapped into a fixed slot window $record_s$, and packed into a coefficient vector $c$. 
+    The vector is then encoded as a BGV plaintext polynomial $m_{\mathrm{DB}}$, which is stored in the Fabric world state.}
+    \label{fig:polynomial-construction}
+\end{figure*}
+
+\textbf{a) Chaincode Execution Timings.}
+Figure~\ref{fig:chaincode-timings} and Table~\ref{tab:chaincode-timings} summarize the average \textit{server-side execution time} of 
+the main chaincode functions across different ring sizes $N=2^{\log N}$. 
+
+\begin{table}[!h]
+    \caption{Average chaincode execution time (ms) per function and ring size}
+    \label{tab:chaincode-timings}
+    \centering
+    \begin{tabular}{|c|c|c|c|}
+    \hline
+    $\log N$ & \texttt{InitLedger} & \texttt{GetMetadata} & \texttt{PIRQuery} \\
+    \hline
+    13 & 165.24 & 6.16 & 12.53 \\
+    14 & 187.03 & 8.31 & 18.17 \\
+    15 & 307.87 & 5.94 & 40.36 \\
+    \hline
+    \end{tabular}
+\end{table}
+
+\begin{figure}[!h]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/plots/chaincode_timings_bw.pdf}
+    \caption{Average chaincode execution time by function and ring size. Each bar represents the mean execution time over multiple epochs.}
+    \label{fig:chaincode-timings}
+\end{figure}
+
+\noindent \textit{Remark (Submittion paths reminder).} 
+Transactions that modify world state (e.g., \textsf{InitLedger}) 
+are issued via the \textsf{submit} path and commit through Raft consensus, 
+while read-only operations (\textsf{GetMetadata}, \textsf{PIRQuery}) 
+use the \textsf{evaluate} path, which bypasses ordering and block creation. 
+
+\subsection{DISCUSSION}
+
+The results, summarized in Table~\ref{tab:crypto-times}, highlight a nearly linear growth trend in total latency with respect to $\log N$.
+
+\begin{table}[!h]
+    \caption{Execution Time of Cryptographic Operations (ms)}
+    \label{tab:crypto-times}
+    \centering
+    \begin{tabular}{|c|c|c|c|c|}
+    \hline
+    $\log N$ & KeyGen & Enc & Eval & Dec \\
+    \hline
+    13 & 27.7 & 11.7 & 16.9 & 5.1 \\
+    14 & 42.7 & 27.7 & 30.7 & 11.9 \\
+    15 & 55.0 & 49.8 & 64.8 & 15.6 \\
+    \hline
+    \end{tabular}
+\end{table}
+
+\noindent The \emph{KeyGen} dominates at small scales due to keypair initialization and parameter validation in \texttt{Lattigo}. 
+\emph{Enc} and \emph{Eval} exhibit moderate scaling with ring size, reflecting the $O(N\log N)$ cost of NTT-based polynomial arithmetic. 
+\emph{Dec} remains lightweight, averaging under 16~ms even for $N=2^{15}$, confirming that decryption and slot extraction overheads are negligible. 
+Overall, end-to-end query latency remains below 200~ms for all configurations, demonstrating that CPIR can be feasibly embedded within Fabric’s \textsf{evaluate} transaction path.
+
+Table~\ref{tab:artifact-sizes} lists the corresponding averages for each $\log N$ configuration.
+
+\begin{table}[!h]
+    \caption{Size of Main Cryptographic Artifacts (KB)}
+    \label{tab:artifact-sizes}
+    \centering
+    \begin{tabular}{|c|c|c|c|c|c|c|}
+    \hline
+    $\log N$ & pk & sk & $ct_q$ & $ct_r$ & $m_{\mathrm{DB}}$ & Metadata \\
+    \hline
+    13 & 256.1 & 128.0 & 128.3 & 128.3 & 64.3 & 0.08 \\
+    14 & 512.1 & 256.0 & 256.3 & 256.3 & 128.3 & 0.08 \\
+    15 & 1024.1 & 512.0 & 512.3 & 512.3 & 256.3 & 0.08 \\
+    \hline
+    \end{tabular}
+\end{table}
+As expected, artifact sizes scale linearly with the ring dimension $N = 2^{\log N}$.
+Public and secret keys exhibit a 2$\times$ growth per level, consistent with BGV’s
+key structure. Ciphertexts ($ct_q$, $ct_r$) approximately double in size with each
+increment in $\log N$, while the plaintext polynomial $m_{\mathrm{DB}}$ occupies
+roughly half of a ciphertext’s footprint. Metadata remains negligible in size
+($< 0.1$~KB). Base64 serialization introduces a $\sim$33\% wire overhead but does not
+affect the underlying cryptographic representation.
+
+\texttt{InitLedger} exhibits the largest execution time, reflecting the cost of initializing and inserting a large batch of encoded CTI records into the ledger world state. 
+\texttt{PIRQuery} remains sublinear with respect to initialization, reflecting the cost of single-query PIR evaluation, which depends on homomorphic multiplication and slot decoding for the given ring dimension. 
+\texttt{GetMetadata}, in contrast, executes quickly ($<10$\,ms on average) since it only retrieves pre-initialized ledger parameters without heavy computation.
+As expected, increasing $\log N$ leads to a monotonic rise in execution time for the PIR-related operations, with the most pronounced growth between $\log N=14$ and $\log N=15$.
+
+Across all configurations, utilization remains above $98\%$, indicating near-optimal packing under the feasibility constraints of Fig.~\ref{fig:exp-matrix}.
+Slight underutilization (e.g., $u\approx0.984$) arises from rounding of slot windows to the nearest discrete size in $\mathcal{S}={64,128,224,256,384,512}$, ensuring consistent record alignment and deterministic indexing.
 
 
 \section{CONCLUSION}

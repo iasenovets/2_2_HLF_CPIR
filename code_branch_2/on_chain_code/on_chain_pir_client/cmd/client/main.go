@@ -102,7 +102,7 @@ func main() {
 	_, err = contract.SubmitTransaction("InitLedger",
 		fmt.Sprintf("%d", dbSize),
 		fmt.Sprintf("%d", maxJSONlength),
-		fmt.Sprintf("%d", logN),
+		logN,
 		logQi,
 		logPi,
 		t)
@@ -140,10 +140,10 @@ func main() {
 	fabgw.Must(err, "PublicQuery failed")
 	fmt.Println("*** record013 =", string(qRes))
 
-	fmt.Println("\n--> Evaluate Transaction: PublicQuerySubmit(record013)")
-	qResAudit, err := contract.SubmitTransaction("PublicQuerySubmit", "record013")
-	fabgw.Must(err, "PublicQuery failed")
-	fmt.Println("*** record013 =", string(qResAudit))
+	//fmt.Println("\n--> Evaluate Transaction: PublicQuerySubmit(record013)")
+	//qResAudit, err := contract.SubmitTransaction("PublicQuerySubmit", "record013")
+	//fabgw.Must(err, "PublicQuery failed")
+	//fmt.Println("*** record013 =", string(qResAudit))
 
 	// 4) Client 2: CPIR: encrypt → evaluate → decrypt
 	fmt.Println("\n--> Encrypting PIR query for index", targetIndex)
@@ -154,14 +154,14 @@ func main() {
 	encResB64Bytes, err := contract.EvaluateTransaction("PIRQuery", encQueryB64)
 	fabgw.Must(err, "PIRQuery failed")
 
-	fmt.Println("\n--> Submit Transaction: PIRQuerySubmit")
-	encResAudited, err := contract.SubmitTransaction("PIRQuerySubmit", encQueryB64)
-	fabgw.Must(err, "PIRQuerySubmit failed")
+	//fmt.Println("\n--> Submit Transaction: PIRQuerySubmit")
+	//encResAudited, err := contract.SubmitTransaction("PIRQuerySubmit", encQueryB64)
+	//fabgw.Must(err, "PIRQuerySubmit failed")
 
 	encResB64 := string(encResB64Bytes)
-	encResAuditedB64 := string(encResAudited)
+	//encResAuditedB64 := string(encResAudited)
 	fmt.Printf("*** Encrypted response (B64 len=%d)\n", len(encResB64))
-	fmt.Printf("*** Encrypted response (audited) (B64 len=%d)\n", len(encResAuditedB64))
+	//fmt.Printf("*** Encrypted response (audited) (B64 len=%d)\n", len(encResAuditedB64))
 
 	fmt.Println("\n--> Decrypting PIR result")
 	decoded, err := cpir.DecryptResult(params, sk, encResB64, targetIndex, serverDbSize, slotsPerRec)

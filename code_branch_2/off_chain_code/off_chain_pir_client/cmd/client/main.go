@@ -19,14 +19,12 @@ func main() {
 	const t = ""              // set the HE parameter plaintext modulus t, or 0 to use default (optional param)
 	const targetIndex = 13    // set the index of the record to be retrieved: 0..dbSize-1 (necessary param)
 
-	fmt.Printf("Demo with LogN=%d, dbSize=%d, maxJSONlength=%d, retrieving record targetIndex=%d\n",
-		logN, dbSize, maxJSONlength, targetIndex)
-
+	fmt.Println("\n--> Submit Transaction: InitLedger")
 	// 1)  Client 1: Init ledger with sample data
 	utils.Call("InitLedger",
 		fmt.Sprintf("%d", dbSize),
 		fmt.Sprintf("%d", maxJSONlength),
-		fmt.Sprintf("%d", logN),
+		logN,
 		logQi,
 		logPi,
 		t,

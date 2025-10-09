@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"on-chain-pir-server/internal/utils"
+	"on_chain_pir_server/internal/utils"
 )
 
 // CTIRecordMini для channel_mini: компактные записи.

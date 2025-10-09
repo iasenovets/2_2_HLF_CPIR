@@ -2,11 +2,11 @@
   "$schema": "https://github.com/hyperledger-labs/fablo/releases/download/2.2.0/schema.json",
   "global": {
     "fabricVersion": "2.5.9",
-    "tls": true,
+    "tls": false,
     "engine": "docker",
-    "peerDevMode": false,
+    "peerDevMode": true,
     "monitoring": {
-      "loglevel": "debug"
+      "loglevel": "info"
     },
     "tools": {
       "explorer":true
@@ -58,7 +58,7 @@
       "version": "0.0.1",
       "lang": "golang",
       "channel": "channel-mini",
-      "directory": "./on_chain_pir_server/cmd/server"
+      "directory": "./on_chain_pir_server/"
     }
 
   ]

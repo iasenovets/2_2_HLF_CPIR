@@ -6,8 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"on-chain-pir-server/internal/gen_records"
-	"on-chain-pir-server/internal/utils"
+	"on_chain_pir_server/internal/gen_records"
+	"on_chain_pir_server/internal/precomputed" // <— add this
+	"on_chain_pir_server/internal/utils"
 	"time"
 
 	"fmt"
@@ -42,6 +43,8 @@ type PIRChainCode struct {
 
 	// Optional cache of JSON records (not required for PIR path)
 	Records [][]byte // world state: "record%03d" keys
+
+	initialized bool
 }
 
 type AuditRecord struct {
@@ -75,12 +78,15 @@ type PublicReadAudit struct {
 
 /**************  INIT LEDGER *******************************************/
 func (cc *PIRChainCode) InitLedger(ctx contractapi.TransactionContextInterface,
-	numRecordsStr, maxJsonLengthStr string, optArgs ...string) error {
+	numRecordsStr, maxJsonLengthStr string) (string, error) {
+
+	dbg("\n/**************  INIT LEDGER START ****************************************/")
+	start := time.Now()
 
 	n, err1 := strconv.Atoi(numRecordsStr)
 	maxJSON, err2 := strconv.Atoi(maxJsonLengthStr)
 	if err1 != nil || err2 != nil || n <= 0 || maxJSON <= 0 {
-		return fmt.Errorf("InitLedger: numRecords and maxJsonLength must be positive integers")
+		return "", fmt.Errorf("InitLedger: numRecords and maxJsonLength must be positive integers")
 	}
 
 	// ---- Optional params: logN, logQi, logPi, t ----
@@ -88,33 +94,12 @@ func (cc *PIRChainCode) InitLedger(ctx contractapi.TransactionContextInterface,
 	var logQi, logPi []int
 	var t uint64 = 65537
 
-	if len(optArgs) >= 1 && optArgs[0] != "" {
-		if v, err := strconv.Atoi(optArgs[0]); err == nil {
-			logN = v
-		}
-	}
-	if len(optArgs) >= 2 && optArgs[1] != "" {
-		if err := json.Unmarshal([]byte(optArgs[1]), &logQi); err != nil {
-			return fmt.Errorf("invalid logQi JSON: %w", err)
-		}
-	}
-	if len(optArgs) >= 3 && optArgs[2] != "" {
-		if err := json.Unmarshal([]byte(optArgs[2]), &logPi); err != nil {
-			return fmt.Errorf("invalid logPi JSON: %w", err)
-		}
-	}
-	if len(optArgs) >= 4 && optArgs[3] != "" {
-		if parsedT, err := strconv.ParseUint(optArgs[3], 10, 64); err == nil && parsedT > 0 {
-			t = parsedT
-		}
-	}
-
 	// ---- Fallback: auto-select logN if missing ----
 	sGuess := ((maxJSON + 7) / 8) * 8
 	if logN <= 0 {
 		chosen, err := utils.ChooseLogN(n, sGuess)
 		if err != nil {
-			return fmt.Errorf("InitLedger: auto-select logN failed: %w", err)
+			return "", fmt.Errorf("InitLedger: auto-select logN failed: %w", err)
 		}
 		logN = chosen
 		dbg("[INFO] Auto-selected LogN=%d using n=%d, s_guess=%d", logN, n, sGuess)
@@ -124,24 +109,26 @@ func (cc *PIRChainCode) InitLedger(ctx contractapi.TransactionContextInterface,
 	hint := utils.BGVParamHint{LogN: logN, LogQi: logQi, LogPi: logPi, T: t}
 	p, err := utils.BuildParamsFromHint(hint)
 	if err != nil {
-		return fmt.Errorf("InitLedger: failed to set params: %w", err)
+		return "", fmt.Errorf("InitLedger: failed to set params: %w", err)
 	}
 	cc.Params = p
 	dbg("[INFO] Params: LogN=%d N=%d |Q|=%d |P|=%d T=%d",
 		p.LogN(), p.N(), len(p.Q()), len(p.P()), p.PlaintextModulus())
 
 	// ---- 2) Generate synthetic records ----
+	dbg("[CC][INIT] Generating synthetic records...")
 	records, err := gen_records.GenerateRecords(n, logN, maxJSON)
 	if err != nil {
-		return err
+		return "", err
 	}
 	cc.Records = records
 	cc.NRecords = len(records)
 
 	// ---- 3) Store JSON records ----
+	dbg("[CC][INIT] Storing JSON records to world state...")
 	for i, rec := range cc.Records {
 		if err := ctx.GetStub().PutState(fmt.Sprintf("record%03d", i), rec); err != nil {
-			return err
+			return "", err
 		}
 	}
 
@@ -151,10 +138,11 @@ func (cc *PIRChainCode) InitLedger(ctx contractapi.TransactionContextInterface,
 	// ---- 5) Capacity check ----
 	required := cc.NRecords * cc.SlotsPerRec
 	if required > cc.Params.MaxSlots() {
-		return fmt.Errorf("capacity exceeded: required=%d > N=%d", required, cc.Params.MaxSlots())
+		return "", fmt.Errorf("capacity exceeded: required=%d > N=%d", required, cc.Params.MaxSlots())
 	}
 
 	// ---- 6) Pack → encode into m_DB ----
+	dbg("[CC][INIT] Packing and encoding database...")
 	packed := make([]uint64, cc.Params.MaxSlots())
 	for recIdx, recBytes := range cc.Records {
 		start := recIdx * cc.SlotsPerRec
@@ -174,14 +162,15 @@ func (cc *PIRChainCode) InitLedger(ctx contractapi.TransactionContextInterface,
 	enc := bgv.NewEncoder(cc.Params)
 	pt := bgv.NewPlaintext(cc.Params, cc.Params.MaxLevel())
 	if err := enc.Encode(packed, pt); err != nil {
-		return fmt.Errorf("failed to encode DB: %v", err)
+		return "", fmt.Errorf("failed to encode DB: %v", err)
 	}
 	cc.m_DB = pt
 
 	// ---- 7) Persist to world state ----
+	dbg("[CC][INIT] Persisting to world state...")
 	ptBytes, _ := pt.MarshalBinary()
 	if err := ctx.GetStub().PutState("m_DB", ptBytes); err != nil {
-		return err
+		return "", err
 	}
 	ctx.GetStub().PutState("n", []byte(fmt.Sprintf("%d", cc.NRecords)))
 	ctx.GetStub().PutState("record_s", []byte(fmt.Sprintf("%d", cc.SlotsPerRec)))
@@ -203,32 +192,48 @@ func (cc *PIRChainCode) InitLedger(ctx contractapi.TransactionContextInterface,
 	ctx.GetStub().PutState("bgv_params", pm)
 
 	// ---- Debug parity log ----
-	dbg("[META] n=%d record_s=%d logN=%d N=%d T=%d logQi=%v logPi=%v",
+	dbg("[CC][INIT][META] n=%d record_s=%d logN=%d N=%d T=%d logQi=%v logPi=%v",
 		cc.NRecords, cc.SlotsPerRec, p.LogN(), p.N(), p.PlaintextModulus(), p.LogQi(), p.LogPi())
+	cc.initialized = true
 
-	return nil
+	elapsed := time.Since(start)
+	executionTime := float64(elapsed.Nanoseconds()) / 1e6
+	dbg("[CC][INIT] Completed in %.3f ms (LogN=%d, slots=%d)",
+		executionTime, cc.Params.LogN(), cc.Params.MaxSlots())
+	dbg("/**************  INIT LEDGER END ******************************************/")
+
+	// Return execution time as JSON
+	result := map[string]interface{}{
+		"status":            "success",
+		"execution_time_ms": executionTime,
+	}
+	resultJSON, _ := json.Marshal(result)
+	return string(resultJSON), nil
 }
 
 /**************  GET METADATA *******************************************/
 func (cc *PIRChainCode) GetMetadata(ctx contractapi.TransactionContextInterface) (string, error) {
+
+	dbg("\n/**************  GET METADATA START ************************************/")
+	start := time.Now()
 	// --- Load n ---
 	nBytes, err := ctx.GetStub().GetState("n")
 	if err != nil || nBytes == nil {
-		return "", fmt.Errorf("GetMetadata: missing n in world state")
+		return "", fmt.Errorf("[CC][GETMETADATA]: missing n in world state")
 	}
 	n, _ := strconv.Atoi(string(nBytes))
 
 	// --- Load record_s ---
 	sBytes, err := ctx.GetStub().GetState("record_s")
 	if err != nil || sBytes == nil {
-		return "", fmt.Errorf("GetMetadata: missing record_s in world state")
+		return "", fmt.Errorf("[CC][GETMETADATA]: missing record_s in world state")
 	}
 	recordS, _ := strconv.Atoi(string(sBytes))
 
 	// --- Load bgv_params ---
 	paramsBytes, err := ctx.GetStub().GetState("bgv_params")
 	if err != nil || paramsBytes == nil {
-		return "", fmt.Errorf("GetMetadata: missing bgv_params in world state")
+		return "", fmt.Errorf("[CC][GETMETADATA]: missing bgv_params in world state")
 	}
 	var paramsMeta struct {
 		LogN  int    `json:"logN"`
@@ -238,7 +243,7 @@ func (cc *PIRChainCode) GetMetadata(ctx contractapi.TransactionContextInterface)
 		T     uint64 `json:"t"`
 	}
 	if err := json.Unmarshal(paramsBytes, &paramsMeta); err != nil {
-		return "", fmt.Errorf("GetMetadata: failed to parse bgv_params: %w", err)
+		return "", fmt.Errorf("[CC][GETMETADATA]: failed to parse bgv_params: %w", err)
 	}
 
 	// --- Construct metadata blob ---
@@ -262,9 +267,21 @@ func (cc *PIRChainCode) GetMetadata(ctx contractapi.TransactionContextInterface)
 
 	out, err := json.Marshal(meta)
 	if err != nil {
-		return "", fmt.Errorf("GetMetadata: failed to marshal metadata: %w", err)
+		return "", fmt.Errorf("[CC][GETMETADATA]: failed to marshal metadata: %w", err)
 	}
-	return string(out), nil
+
+	elapsed := time.Since(start)
+	executionTime := float64(elapsed.Nanoseconds()) / 1e6
+	dbg("[CC][GETMETADATA] Completed in %.3f ms", executionTime)
+	dbg("/**************  GET METADATA END **************************************/")
+
+	// Return metadata with execution time
+	result := map[string]interface{}{
+		"metadata":          json.RawMessage(out),
+		"execution_time_ms": executionTime,
+	}
+	resultJSON, _ := json.Marshal(result)
+	return string(resultJSON), nil
 }
 
 /**************  PUBLIC QUERY *******************************************/
@@ -339,9 +356,14 @@ func (cc *PIRChainCode) PublicQuerySubmit(ctx contractapi.TransactionContextInte
 /**************  PIR QUERY *********************************************/
 
 func (cc *PIRChainCode) PIRQuery(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
+	dbg("\n/**************  PIR QUERY START ****************************************/")
+	start := time.Now()
+
 	if encQueryB64 == "" {
 		return "", fmt.Errorf("PIRQuery: empty encQueryB64")
 	}
+	fmt.Printf("Received encQueryB64 length: %d\n", len(encQueryB64))
+	fmt.Printf("First 100 chars: %s\n", encQueryB64[:min(100, len(encQueryB64))])
 
 	// Ensure m_DB is available (reload from ledger if needed)
 	if cc.m_DB == nil {
@@ -369,25 +391,29 @@ func (cc *PIRChainCode) PIRQuery(ctx contractapi.TransactionContextInterface, en
 	if err := ctQuery.UnmarshalBinary(encBytes); err != nil {
 		return "", fmt.Errorf("PIRQuery: failed to unmarshal query ciphertext: %w", err)
 	}
-	dbg("[CC][EVAL] Query ciphertext size = %d bytes", len(encBytes))
+	dbg("[CC][PIR] Query ciphertext size = %d bytes", len(encBytes))
 
 	// Homomorphic evaluation: ct × pt
 	eval := bgv.NewEvaluator(cc.Params, nil)
-	start := time.Now()
+	homomorphicStart := time.Now()
 	ctRes, err := eval.MulNew(ctQuery, cc.m_DB)
 	if err != nil {
 		return "", fmt.Errorf("PIRQuery: PIR evaluation failed: %w", err)
 	}
-	elapsed := time.Since(start)
-	dbg("[CC][EVAL] Completed in %.3f ms (LogN=%d, slots=%d)",
-		float64(elapsed.Nanoseconds())/1e6, cc.Params.LogN(), cc.Params.MaxSlots())
+	homomorphicElapsed := time.Since(homomorphicStart)
+	dbg("[CC][PIR] Homomorphic evaluation completed in %.3f ms", float64(homomorphicElapsed.Nanoseconds())/1e6)
 
 	// Marshal result → Base64
 	outBytes, err := ctRes.MarshalBinary()
 	if err != nil {
 		return "", fmt.Errorf("PIRQuery: failed to marshal result ciphertext: %w", err)
 	}
-	dbg("[CC][EVAL] Result ciphertext size = %d bytes", len(outBytes))
+	dbg("[CC][PIR] Result ciphertext size = %d bytes", len(outBytes))
+
+	elapsed := time.Since(start)
+	dbg("[CC][PIR] Total PIRQuery completed in %.3f ms (HE eval: %.3f ms)",
+		float64(elapsed.Nanoseconds())/1e6, float64(homomorphicElapsed.Nanoseconds())/1e6)
+	dbg("/**************  PIR QUERY END ******************************************/")
 
 	return base64.StdEncoding.EncodeToString(outBytes), nil
 }
@@ -480,6 +506,89 @@ func (cc *PIRChainCode) PIRQuerySubmit(ctx contractapi.TransactionContextInterfa
 	}
 
 	return outB64, nil
+}
+
+// Evaluate-style (no ledger writes) - use this path if you're submitting through cli (peer query ...)
+func (cc *PIRChainCode) PIRQueryAuto(ctx contractapi.TransactionContextInterface) (string, error) {
+	// Option A: If you maintain an "initialized" flag:
+	dbg("\n/**************  PIR QUERY AUTO START ***********************************/")
+	start := time.Now()
+
+	if !cc.initialized {
+		return "", fmt.Errorf("[CC][PIR_AUTO]: chaincode not initialized - call InitLedger first")
+	}
+
+	logN := cc.Params.LogN()
+	ctb64, ok := precomputed.B64ForLogN(logN)
+	if !ok {
+		return "", fmt.Errorf("[CC][PIR_AUTO]: no precomputed ct_q for LogN=%d", logN)
+	}
+	dbg("[CC][PIR_AUTO] using baked ct_q for LogN=%d (len=%d)", logN, len(ctb64))
+	result, _ := cc.PIRQuery(ctx, ctb64)
+
+	elapsed := time.Since(start)
+	executionTime := float64(elapsed.Nanoseconds()) / 1e6
+	dbg("[CC][PIR_AUTO] Completed in %.3f ms", executionTime)
+	dbg("/**************  PIR QUERY AUTO END *************************************/")
+
+	// Return result with execution time
+	response := map[string]interface{}{
+		"encrypted_result":  result,
+		"execution_time_ms": executionTime,
+	}
+	responseJSON, _ := json.Marshal(response)
+	return string(responseJSON), nil
+}
+
+// GetStateSize(key) -> int
+func (cc *PIRChainCode) GetStateSize(ctx contractapi.TransactionContextInterface, key string) (int, error) {
+	val, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return 0, err
+	}
+	return len(val), nil
+}
+
+// GetHistoryForKey returns the full modification history of a key as JSON. (useful when reInit)
+func (cc *PIRChainCode) GetHistoryForKey(ctx contractapi.TransactionContextInterface, key string) (string, error) {
+	historyIter, err := ctx.GetStub().GetHistoryForKey(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to get history for key %s: %v", key, err)
+	}
+	defer historyIter.Close()
+
+	var records []map[string]interface{}
+
+	for historyIter.HasNext() {
+		mod, err := historyIter.Next()
+		if err != nil {
+			return "", fmt.Errorf("error iterating history: %v", err)
+		}
+
+		record := map[string]interface{}{
+			"tx_id":        mod.TxId,
+			"is_delete":    mod.IsDelete,
+			"timestamp":    mod.Timestamp.AsTime().UTC().Format(time.RFC3339),
+			"value_length": len(mod.Value),
+		}
+
+		// Try to decode value as JSON, fallback to string
+		var decoded interface{}
+		if json.Unmarshal(mod.Value, &decoded) == nil {
+			record["value"] = decoded
+		} else {
+			record["value"] = string(mod.Value)
+		}
+
+		records = append(records, record)
+	}
+
+	out, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("error marshaling history: %v", err)
+	}
+
+	return string(out), nil
 }
 
 /**************  MAIN **************************************************/

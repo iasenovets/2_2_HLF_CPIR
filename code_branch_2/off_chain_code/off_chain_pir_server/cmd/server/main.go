@@ -18,6 +18,11 @@ import (
 )
 
 /********* МОДЕЛИ *************************************************/
+// pirTimedResp defines the JSON structure returned by PIRQueryTimed.
+type pirTimedResp struct {
+	EvalMS float64 `json:"eval_ms"`
+	B64    string  `json:"b64"`
+}
 
 type request struct {
 	Method string   `json:"method"`
@@ -115,6 +120,18 @@ func (ls *LedgerState) invoke(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		utils.WriteOK(w, outB64)
+
+	case "PIRQueryTimed":
+		if len(req.Args) != 1 {
+			utils.WriteErr(w, fmt.Errorf("need encQueryB64"))
+			return
+		}
+		outJSON, err := ls.pirQueryTimed(req.Args[0])
+		if err != nil {
+			utils.WriteErr(w, err)
+			return
+		}
+		utils.WriteOK(w, outJSON)
 
 	// helper cases
 	case "PublicQuery":
@@ -338,6 +355,60 @@ func (ls *LedgerState) pirQuery(encQueryB64 string) (string, error) {
 	log.Printf("[EVAL] Result ciphertext size = %d bytes", len(outBytes))
 
 	return base64.StdEncoding.EncodeToString(outBytes), nil
+}
+
+// pirQueryTimed runs PIR evaluation and returns timing + ciphertext.
+// pirQueryTimed performs the same PIR evaluation as pirQuery()
+// but returns a JSON object with the Base64 ciphertext and internal Eval time in ms.
+func (ls *LedgerState) pirQueryTimed(encQueryB64 string) (string, error) {
+	ls.mtx.RLock()
+	defer ls.mtx.RUnlock()
+
+	if ls.m_DB == nil {
+		return "", fmt.Errorf("PIR database not initialized")
+	}
+
+	// Decode input ciphertext
+	encBytes, err := base64.StdEncoding.DecodeString(encQueryB64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode base64 query: %w", err)
+	}
+
+	ctQuery := rlwe.NewCiphertext(ls.params, 1, ls.params.MaxLevel())
+	if err := ctQuery.UnmarshalBinary(encBytes); err != nil {
+		return "", fmt.Errorf("failed to unmarshal ciphertext: %w", err)
+	}
+
+	// Perform homomorphic multiplication (ct × pt)
+	eval := bgv.NewEvaluator(ls.params, nil)
+	start := time.Now()
+	ctRes, err := eval.MulNew(ctQuery, ls.m_DB)
+	if err != nil {
+		return "", fmt.Errorf("PIR evaluation failed: %w", err)
+	}
+	evalMS := float64(time.Since(start).Nanoseconds()) / 1e6 // ms
+
+	// Serialize result
+	outBytes, err := ctRes.MarshalBinary()
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal result ciphertext: %w", err)
+	}
+
+	outB64 := base64.StdEncoding.EncodeToString(outBytes)
+
+	// Compose JSON
+	payload := map[string]interface{}{
+		"b64":     outB64,
+		"eval_ms": evalMS,
+	}
+	outJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal PIRQueryTimed response: %w", err)
+	}
+
+	log.Printf("[EVAL_TIMED] Eval completed in %.3f ms (LogN=%d, N=%d)", evalMS, ls.params.LogN(), ls.params.N())
+
+	return string(outJSON), nil
 }
 
 func (ls *LedgerState) publicQuery(w http.ResponseWriter, key string) {
