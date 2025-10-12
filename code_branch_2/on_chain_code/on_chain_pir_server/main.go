@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hyperledger/fabric-chaincode-go/pkg/cid"
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/schemes/bgv"
@@ -45,35 +44,6 @@ type PIRChainCode struct {
 	Records [][]byte // world state: "record%03d" keys
 
 	initialized bool
-}
-
-type AuditRecord struct {
-	TxID      string `json:"tx_id"`
-	Channel   string `json:"channel"`
-	ClientMSP string `json:"client_msp"`
-	ClientID  string `json:"client_id"`
-
-	// EncQuery info (we persist the full B64 under a separate key)
-	EncQueryLenB64 int    `json:"enc_query_len_b64"`
-	EncQueryHead   string `json:"enc_query_b64_head"` // first 48 chars for quick debug
-
-	// m_DB provenance (keep the hash—compact and verifiable)
-	MDBSHA256   string `json:"m_DB_sha256"`
-	SlotsPerRec int    `json:"slots_per_rec,omitempty"`
-	DBSize      int    `json:"db_size,omitempty"`
-
-	// Response size (B64)
-	ResultLenB64 int `json:"result_len_b64"`
-}
-
-type PublicReadAudit struct {
-	TxID      string `json:"tx_id"`
-	Channel   string `json:"channel"`
-	ClientMSP string `json:"client_msp"`
-	ClientID  string `json:"client_id"`
-	Key       string `json:"key"`
-	ValueLen  int    `json:"value_len"`
-	ValueHead string `json:"value_head"` // first bytes for quick diff in Explorer
 }
 
 /**************  INIT LEDGER *******************************************/
@@ -270,6 +240,9 @@ func (cc *PIRChainCode) GetMetadata(ctx contractapi.TransactionContextInterface)
 		return "", fmt.Errorf("[CC][GETMETADATA]: failed to marshal metadata: %w", err)
 	}
 
+	dbg("[CC][GETMETADATA] n=%d record_s=%d | LogN=%d N=%d T=%d | LogQi=%v LogPi=%v",
+		meta.NRecords, meta.RecordS, meta.LogN, meta.N, meta.T, meta.LogQi, meta.LogPi)
+
 	elapsed := time.Since(start)
 	executionTime := float64(elapsed.Nanoseconds()) / 1e6
 	dbg("[CC][GETMETADATA] Completed in %.3f ms", executionTime)
@@ -286,8 +259,16 @@ func (cc *PIRChainCode) GetMetadata(ctx contractapi.TransactionContextInterface)
 
 /**************  PUBLIC QUERY *******************************************/
 func (cc *PIRChainCode) PublicQuery(ctx contractapi.TransactionContextInterface, key string) (string, error) {
+	dbg("\n/**************  PUBLIC QUERY START ****************************************/")
+
 	if key == "" {
 		return "", fmt.Errorf("PublicQuery: key must not be empty")
+	}
+
+	if idx, ok := utils.ParseRecordIndex(key); ok {
+		dbg("[CC][PUBLIC] Retrieving key=%q (index=%d)", key, idx)
+	} else {
+		dbg("[CC][PUBLIC] Retrieving key=%q (index=unknown)", key)
 	}
 
 	// --- Load record from world state ---
@@ -299,57 +280,7 @@ func (cc *PIRChainCode) PublicQuery(ctx contractapi.TransactionContextInterface,
 		return "", fmt.Errorf("PublicQuery: record %s not found", key)
 	}
 
-	// return raw JSON string (consistent with off-chain)
-	return string(b), nil
-}
-
-func (cc *PIRChainCode) PublicQuerySubmit(ctx contractapi.TransactionContextInterface, key string) (string, error) {
-	// Read the value exactly as in the evaluate path
-	b, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return "", err
-	}
-	if b == nil {
-		return "", fmt.Errorf("record not found")
-	}
-
-	// For easy container-log comparison
-	head := string(b)
-	if len(head) > 64 {
-		head = head[:64] + "..."
-	}
-	dbg("[CC] PublicQuerySubmit (submit) key=%s len=%d head=%q", key, len(b), head)
-
-	// Identity + tx info (stable across endorsers)
-	cidLib, _ := cid.New(ctx.GetStub())
-	mspID, _ := cidLib.GetMSPID()
-	clientID, _ := cidLib.GetID()
-	txID := ctx.GetStub().GetTxID()
-	channel := "" // not exposed by stub; pass it as arg if needed
-
-	// Compose compact audit JSON
-	a := PublicReadAudit{
-		TxID:      txID,
-		Channel:   channel,
-		ClientMSP: mspID,
-		ClientID:  clientID,
-		Key:       key,
-		ValueLen:  len(b),
-		ValueHead: head,
-	}
-	aJSON, _ := json.Marshal(a)
-
-	// Write compact audit entry
-	auditKey := "audit:public:" + txID
-	if err := ctx.GetStub().PutState(auditKey, aJSON); err != nil {
-		return "", err
-	}
-
-	// Optionally: persist full payloads for deep diffs (toggle if you want)
-	// _ = ctx.GetStub().PutState("audit:public:key:"+txID, []byte(key))
-	// _ = ctx.GetStub().PutState("audit:public:value:"+txID, b)
-
-	// Return the record as raw JSON string to the client (handy for paper/demo)
+	dbg("/**************  PUBLIC QUERY END ******************************************/")
 	return string(b), nil
 }
 
@@ -387,6 +318,13 @@ func (cc *PIRChainCode) PIRQuery(ctx contractapi.TransactionContextInterface, en
 	if err != nil {
 		return "", fmt.Errorf("PIRQuery: failed to decode base64 query: %w", err)
 	}
+	{
+		// hash + head hex for quick correlation with client logs
+		sum := sha256.Sum256(encBytes)
+		dbg("[CC][PIR] Decoded query: bytes=%d sha256=%s head32=%s",
+			len(encBytes), hex.EncodeToString(sum[:]), utils.HexHead(encBytes, 32))
+	}
+
 	ctQuery := rlwe.NewCiphertext(cc.Params, 1, cc.Params.MaxLevel())
 	if err := ctQuery.UnmarshalBinary(encBytes); err != nil {
 		return "", fmt.Errorf("PIRQuery: failed to unmarshal query ciphertext: %w", err)
@@ -416,96 +354,6 @@ func (cc *PIRChainCode) PIRQuery(ctx contractapi.TransactionContextInterface, en
 	dbg("/**************  PIR QUERY END ******************************************/")
 
 	return base64.StdEncoding.EncodeToString(outBytes), nil
-}
-
-func (cc *PIRChainCode) PIRQuerySubmit(ctx contractapi.TransactionContextInterface, encQueryB64 string) (string, error) {
-	// 1) Ensure m_DB is loaded
-	if cc.m_DB == nil {
-		raw, err := ctx.GetStub().GetState("m_DB")
-		if err != nil {
-			return "", err
-		}
-		pt := bgv.NewPlaintext(cc.Params, cc.Params.MaxLevel())
-		if err := pt.UnmarshalBinary(raw); err != nil {
-			return "", err
-		}
-		cc.m_DB = pt
-		dbg("[CC] m_DB reloaded in memory")
-	}
-
-	// --- Optional size guard (tune to your needs) ---
-	const maxAuditPayloadB64 = 512 * 1024 // 512 KB cap for EncQueryB64 on-ledger
-	if len(encQueryB64) > maxAuditPayloadB64 {
-		return "", fmt.Errorf("encQueryB64 too large (%d > %d bytes), refusing to audit-store payload",
-			len(encQueryB64), maxAuditPayloadB64)
-	}
-
-	// 2) Decode client ciphertext (argument the peer sees)
-	encBytes, err := base64.StdEncoding.DecodeString(encQueryB64)
-	if err != nil {
-		return "", err
-	}
-	ctQuery := rlwe.NewCiphertext(cc.Params, 1)
-	if err := ctQuery.UnmarshalBinary(encBytes); err != nil {
-		return "", err
-	}
-	dbg("[CC] PIRQuerySubmit: received ciphertext (bytes=%d)", len(encBytes))
-
-	// 3) PIR evaluation (ct × pt)
-	eval := bgv.NewEvaluator(cc.Params, nil)
-	ctRes, err := eval.MulNew(ctQuery, cc.m_DB)
-	if err != nil {
-		return "", err
-	}
-	outBytes, _ := ctRes.MarshalBinary()
-	outB64 := base64.StdEncoding.EncodeToString(outBytes)
-	dbg("[CC] PIRQuerySubmit: returning result (bytes=%d)", len(outBytes))
-
-	// 4) Build audit record with full payload stored separately
-	//    - m_DB hash (compact provenance)
-	m_DBBytes, _ := cc.m_DB.MarshalBinary()
-	ph := sha256.Sum256(m_DBBytes)
-
-	//    - client identity
-	cidLib, _ := cid.New(ctx.GetStub())
-	mspID, _ := cidLib.GetMSPID()
-	clientID, _ := cidLib.GetID()
-
-	//    - tx/channel
-	txID := ctx.GetStub().GetTxID()
-	channel := "" // Fabric stub doesn't expose channel; pass it as an arg if you need it.
-
-	// head preview (48 chars like your client debug)
-	head := encQueryB64
-	if len(head) > 48 {
-		head = head[:48] + "..."
-	}
-
-	audit := AuditRecord{
-		TxID:           txID,
-		Channel:        channel,
-		ClientMSP:      mspID,
-		ClientID:       clientID,
-		EncQueryLenB64: len(encQueryB64),
-		EncQueryHead:   head,
-		MDBSHA256:      hex.EncodeToString(ph[:]),
-		ResultLenB64:   len(outB64),
-	}
-	auditJSON, _ := json.Marshal(audit)
-
-	// 5) Write compact audit record
-	auditKey := "audit:" + txID
-	if err := ctx.GetStub().PutState(auditKey, auditJSON); err != nil {
-		return "", err
-	}
-
-	// 6) Write the full EncQueryB64 under a companion key
-	payloadKey := "audit:payload:" + txID
-	if err := ctx.GetStub().PutState(payloadKey, []byte(encQueryB64)); err != nil {
-		return "", err
-	}
-
-	return outB64, nil
 }
 
 // Evaluate-style (no ledger writes) - use this path if you're submitting through cli (peer query ...)

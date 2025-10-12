@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/schemes/bgv"
@@ -203,6 +204,33 @@ func DebugPrintRecords(params bgv.Parameters, records [][]byte, slotsPerRec int,
 	}
 
 	log.Println("--- END DEBUG DB CONTENT ---")
+}
+
+// parseRecordIndex extracts the numeric index from keys like "record013" → 13.
+// Returns (idx, true) on success, or (0, false) if the key doesn't match.
+func ParseRecordIndex(key string) (int, bool) {
+	const pfx = "record"
+	if !strings.HasPrefix(key, pfx) {
+		return 0, false
+	}
+	s := key[len(pfx):]
+	idx, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, false
+	}
+	return idx, true
+}
+
+// hexHead returns up to the first n bytes of b as a hex string (no "0x"),
+// with "..." suffix if truncated.
+func HexHead(b []byte, n int) string {
+	if len(b) == 0 {
+		return ""
+	}
+	if len(b) <= n {
+		return hex.EncodeToString(b)
+	}
+	return hex.EncodeToString(b[:n]) + "..."
 }
 
 func WriteOK(w http.ResponseWriter, resp string) {

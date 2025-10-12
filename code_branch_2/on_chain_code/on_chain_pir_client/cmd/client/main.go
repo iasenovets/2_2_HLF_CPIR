@@ -26,7 +26,7 @@ var (
 	peerEndpoint  = "localhost:7041"
 	gatewayPeer   = "peer0.org1.example.com"
 	channelName   = "channel-mini"
-	chaincodeName = "channel_mini_cpir"
+	chaincodeName = "on_chain_pir"
 
 	// to be filled at runtime in init()
 	cryptoPath  string
@@ -116,13 +116,17 @@ func main() {
 	metaRaw, err := contract.EvaluateTransaction("GetMetadata")
 	fabgw.Must(err, "GetMetadata failed")
 
-	var meta cpir.Metadata
-	if err := json.Unmarshal(metaRaw, &meta); err != nil {
-		fabgw.Must(err, "failed to parse GetMetadata JSON")
+	var wrap struct {
+		Metadata        cpir.Metadata `json:"metadata"`
+		ExecutionTimeMS float64       `json:"execution_time_ms"`
+	}
+	if err := json.Unmarshal(metaRaw, &wrap); err != nil {
+		fabgw.Must(err, "failed to parse GetMetadata wrapper JSON")
 	}
 
-	fmt.Printf("*** n=%d  s=%d  logN=%d  N=%d  t=%d  logQi=%v  logPi=%v\n",
-		meta.NRecords, meta.RecordS, meta.LogN, meta.N, meta.T, meta.LogQi, meta.LogPi)
+	meta := wrap.Metadata
+	fmt.Printf("*** n=%d  s=%d  logN=%d  N=%d  t=%d  logQi=%v  logPi=%v (server %.3f ms)\n",
+		meta.NRecords, meta.RecordS, meta.LogN, meta.N, meta.T, meta.LogQi, meta.LogPi, wrap.ExecutionTimeMS)
 
 	// 3) Client 2: Build HE params/keys from server metadata (parity with off-chain)
 	params, sk, pk, err := cpir.GenKeysFromMetadata(meta)
@@ -140,11 +144,6 @@ func main() {
 	fabgw.Must(err, "PublicQuery failed")
 	fmt.Println("*** record013 =", string(qRes))
 
-	//fmt.Println("\n--> Evaluate Transaction: PublicQuerySubmit(record013)")
-	//qResAudit, err := contract.SubmitTransaction("PublicQuerySubmit", "record013")
-	//fabgw.Must(err, "PublicQuery failed")
-	//fmt.Println("*** record013 =", string(qResAudit))
-
 	// 4) Client 2: CPIR: encrypt → evaluate → decrypt
 	fmt.Println("\n--> Encrypting PIR query for index", targetIndex)
 	encQueryB64, _, err := cpir.EncryptQueryBase64(params, pk, targetIndex, serverDbSize, slotsPerRec)
@@ -154,14 +153,8 @@ func main() {
 	encResB64Bytes, err := contract.EvaluateTransaction("PIRQuery", encQueryB64)
 	fabgw.Must(err, "PIRQuery failed")
 
-	//fmt.Println("\n--> Submit Transaction: PIRQuerySubmit")
-	//encResAudited, err := contract.SubmitTransaction("PIRQuerySubmit", encQueryB64)
-	//fabgw.Must(err, "PIRQuerySubmit failed")
-
 	encResB64 := string(encResB64Bytes)
-	//encResAuditedB64 := string(encResAudited)
 	fmt.Printf("*** Encrypted response (B64 len=%d)\n", len(encResB64))
-	//fmt.Printf("*** Encrypted response (audited) (B64 len=%d)\n", len(encResAuditedB64))
 
 	fmt.Println("\n--> Decrypting PIR result")
 	decoded, err := cpir.DecryptResult(params, sk, encResB64, targetIndex, serverDbSize, slotsPerRec)

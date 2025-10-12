@@ -13,10 +13,10 @@
 \AtBeginDocument{\definecolor{tmlcncolor}{cmyk}{0.93,0.59,0.15,0.02}\definecolor{NavyBlue}{RGB}{0,86,125}}
 
 
-\newcommand{\encB}[1]{\mathsf{enc}^{\mathrm{B64}}\!\left(#1\right)}
-\newcommand{\decB}[1]{\mathsf{dec}^{\mathrm{B64}}\!\left(#1\right)}
-\newcommand{\encP}[1]{\mathsf{enc}^{\mathrm{poly}}\!\left(#1\right)}
-\newcommand{\decP}[1]{\mathsf{dec}^{\mathrm{poly}}\!\left(#1\right)}
+\newcommand{\encB}[1]{\emph{enc}^{\mathrm{B64}}\!\left(#1\right)}
+\newcommand{\decB}[1]{\emph{dec}^{\mathrm{B64}}\!\left(#1\right)}
+\newcommand{\encP}[1]{\emph{enc}^{\mathrm{poly}}\!\left(#1\right)}
+\newcommand{\decP}[1]{\emph{dec}^{\mathrm{poly}}\!\left(#1\right)}
 
 \newcommand{\ser}[1]{\mathsf{ser}^{\mathrm{bin}}\!\left(#1\right)}
 \newcommand{\des}[1]{\mathsf{des}^{\mathrm{bin}}\!\left(#1\right)}
@@ -42,7 +42,7 @@
 
 \markboth{}{Author {et al.}}
 
-\title{Blind Chaincode: Enabling Computational Private Information Retrieval for Query Privacy in Hyperledger Fabric}
+\title{HLFCPIR: Embedding Computational Private Information Retrieval into Hyperledger Fabric Chaincode for Query Privacy}
 
 
 \author{First A. Author\authorrefmark{1}, Fellow, IEEE, Second B. Author\authorrefmark{2},\\ and Third C. Author Jr.\authorrefmark{3}, Member, IEEE}
@@ -60,7 +60,7 @@
     Our design encodes the ledger’s key–value table as a plaintext polynomial and allows clients to submit encrypted selection vectors, evaluated under the Brakerski--Gentry--Vaikuntanathan (BGV) homomorphic encryption scheme. 
     Peers return only encrypted responses, preventing index leakage while preserving normal Fabric endorsement and audit flows. 
     We prototype the system with the Lattigo library and benchmark client-side encryption/decryption, peer-side evaluation, ciphertext size, and end-to-end query latency. 
-    Results show that single-query latencies remain practical for typical Fabric deployments, while eliminating the privacy leakage of baseline \texttt{GetState} operations. 
+    Results show that single-query latencies remain practical for typical Fabric deployments, while eliminating the privacy leakage of baseline operations. 
     This work demonstrates the feasibility of embedding CPIR directly into permissioned blockchains and provides a foundation for future enhancements such as post-quantum schemes, zero-knowledge proofs, and sublinear retrieval.
 \end{abstract}
     
@@ -77,44 +77,35 @@
 
 \section{INTRODUCTION}\label{sec:introduction}
 
-\subsection{MOTIVATION AND CONTRIBUTION}
+\subsection{MOTIVATION AND PROBLEM STATEMENT}
 
 Permissioned blockchains such as Hyperledger Fabric are widely adopted for tamper-evident and auditable data management across consortiums. 
 Their guarantees, however, primarily cover writes. 
-In Fabric, the separation of \emph{evaluate} and \emph{submit} makes the read-privacy gap explicit: an evaluate call is a read-only proposal sent to endorsing peers, which execute the chaincode and return results without committing to the ledger. 
+In Fabric, the separation of \emph{evaluate} and \emph{submit} makes the read-privacy gap explicit: 
+an evaluate call is a read-only proposal sent to endorsing peers, which execute the chaincode and return results without committing to the ledger. 
 Crucially, these peers still observe all function arguments and read-sets. 
-Thus, in multi-organization settings, the dominant privacy risk arises not from the immutable ledger, but from endorsing peers who can log or infer sensitive query information.
+Thus, in multi-organization settings, the dominant privacy risk arises not from the immutable ledger, 
+but from endorsing peers who can log or infer sensitive query information.
 
-Private Information Retrieval (PIR)~\cite{ref16_Chor1998Private} addresses this challenge by enabling a client to retrieve an item from a database without revealing which item was requested. 
-For a database $D = \{d_0,\dots,d_{n-1}\}$, the client forms a one-hot selection vector $\hat{v}_i$ with a single ``1'' at index $i$. 
-By encrypting $\hat{v}_i$ into $c_q = \text{Enc}_{pk}(\hat{v}_i)$ and sending it to the server, the server computes an encrypted response 
-$c_r = c_q \cdot D = \text{Enc}_{pk}(d_i)$, 
-which decrypts to $d_i$ under the client’s secret key. 
-This construction hides the queried index from the server. 
-When integrated with Fabric chaincode, PIR prevents endorsing peers from linking queries to specific records, while preserving blockchain auditability for writes.
+This motivates us to target \emph{query} or \emph{read} privacy issue in Fabric, defined as the ability to hide which record is being queried from endorsing peers during \emph{evaluate} type calls. 
+Given problem description, an obvious approach is to construct and use Private Information Retrieval (PIR)~\cite{ref16_Chor1998Private} protocol, which would enable client to retrieve an item 
+from a world state database without revealing to peer which item was requested. There are two main types of PIR schemes:
 
-Figure~\ref{fig1} illustrates this contrast. 
-A baseline query call \textit{PublicQueryWithAudit("record012")} explicitly reveals the queried key in the audit log visible to endorsing peers. 
-In contrast, our \textit{PIRQueryWithAudit(encQueryB64)} logs only an opaque Base64-encoded selector, preventing the audit trail or the read-set from exposing query intent.
+Earlier Information-Theoretic (IT-PIR) schemes~\cite{ref16_Chor1998Private} provide unconditional privacy by distributing the database across 
+multiple non-colluding servers, a client then queries subsets of servers such that no single server learns the selection index. 
 
-\begin{figure}[!t]
-    \centerline{\includegraphics[width=\columnwidth]{figures/diagrams/0_pir.png}}
-    \caption{What endorsing peers ``see'' in audit records. 
-    Left: baseline \textit{PublicQueryWithAudit} exposes the queried key (\textit{record012}). 
-    Right: CPIR-based \textit{PIRQueryWithAudit} exposes only an opaque encrypted selector (\textit{EncQueryB64}), hiding the queried index.\label{fig1}}    
-\end{figure}
+Computational PIR (CPIR) schemes relying on hardness assumptions and homomorphic encryption achieve privacy with a single server. 
+Model the database as a vector $D=\{d_0,\dots,d_{n-1}\}$. To retrieve desired record $d_i$ without revealing $i$, the client forms a one-hot selection 
+vector $\hat{v}_i$ defined as $\hat{v}_i= (0,\dots,0,1,0,\dots,0)$ where $1$ corresponds to the desired record at index $i$. 
+He then encrypts it as $ct_q = \text{Enc}_{pk}(\hat{v}_i)$ under a public key $pk$ and sends $ct_q$ to the server, which computes 
+$ct_r = (ct_q \cdot D) = \text{Enc}_{pk}(d_i)$, returning $ct_r$ to the client for decryption $d_i = \text{Dec}_{sk}(ct_r)$ using his secret key $sk$,
+thus obtaining the desired record $d_i$ without revealing $i$ to the server, or peer in our case.
 
-The main contributions of this work are:
-\begin{enumerate}
-    \item \textbf{BGV-based CPIR as Fabric chaincode.} We present, to the best of our knowledge, the first fully on-chain implementation of Computational PIR (CPIR) based on the BGV scheme, integrated directly into Hyperledger Fabric chaincode.
-    \item \textbf{Evaluate-phase privacy demonstration.} We provide a side-by-side analysis of baseline vs. CPIR queries, showing how endorsing peers’ visibility is reduced to opaque ciphertexts while preserving Fabric’s normal endorsement and audit mechanisms.
-    \item \textbf{Prototype and benchmarks.} We implement a working system with the Lattigo library and measure client encryption/decryption, peer evaluation, ciphertext size, and end-to-end query latency, demonstrating practical performance for consortium deployments.
-    \item \textbf{Open-Source Release.} To encourage reproducibility and use by other researchers, we open-source the complete CPIR-on-Blockchain system, including chaincode, client, and experimental setup. The repository is available at: \url{https://github.com/artias13/2_2_HLF_CPIR}.
-\end{enumerate}
+However, consortium settings exclude IT-PIR due to multiple non-colluding servers requirement, since all peers are typically considered 
+honest-but-curious, and collusion is a realistic threat.
 
 \subsection{LITERATURE REVIEW}
-
-Privacy in permissioned blockchains has been studied from several angles, but query privacy remains underexplored. 
+We now examine existing attempts to address mentioned problem and identify the gap that our work fills.
 
 \textbf{Blockchain Privacy Mechanisms.} 
 Early efforts have emphasized access control and anonymity. 
@@ -127,187 +118,219 @@ Queries themselves remain visible to endorsing peers.
 A line of work has applied Private Information Retrieval (PIR) or Fully Homomorphic Encryption (FHE) to protect data access. 
 Tan et al.~\cite{tan2019} use CPIR to hide vehicular location queries. 
 Chakraborty et al.~\cite{chakraborty2020} propose BRON, combining PIR with zero-knowledge proofs for human-resource data. 
-Mazmudar et al.~\cite{mazmudar2021} integrate PIR with IPFS for private queries in distributed file sharing, while Hameed et al.~\cite{hameed2022} present DEBPIR, embedding an Oblivious Transfer–based PIR into Fabric smart contracts. 
-These works demonstrate the feasibility of PIR in distributed settings but often rely on off-chain servers or specialized cryptographic protocols.
+Mazmudar et al.~\cite{mazmudar2021} integrate PIR with IPFS for private queries in distributed file sharing, 
+while Hameed et al.~\cite{hameed2022} present DEBPIR, embedding an Oblivious Transfer–based PIR into Fabric smart contracts. 
+These works demonstrate the feasibility of PIR in distributed settings but rely on extra cryptographic layers, multiple servers or off-chain components. 
 
-\textbf{On-Chain CPIR Gap.}
-Existing solutions for Fabric focus on access restriction (channels, PDC) or enclave-based confidentiality (FPC). 
-Recent PIR-based proposals either target off-chain databases or prototype OT-based protocols. 
-To our knowledge, no prior system has directly integrated a lattice-based CPIR scheme into Fabric chaincode. 
-Our work closes this gap by embedding a BGV-based PIR workflow directly in Fabric’s evaluate path, ensuring that endorsing peers cannot infer queried indices while preserving normal endorsement and auditability.
+\textbf{Targeted gap.}
+To our knowledge, no prior work provided a systematic framework for embedding CPIR directly into Fabric chaincode nor 
+has directly integrated a lattice-based CPIR scheme into Fabric chaincode to hide query indices from endorsing peers.
+We believe that this gap persists partly due to a misconception: blockchain and PIR are often seen as serving opposite 
+functions —auditability versus privacy— when in fact they can be complementary. 
+
+This statement is backed by a recently published Privacy-Preserving Roadmap by PSE team in Ethereum foundation, 
+which highlights private reads as a key track alongside private writes and private proving for Ethereum's developement ~\cite{ref19_EthPrivRoadmap2024}. 
+
+Combining Fabric with CPIR thus yields a dual guarantee: (1) writes remain auditable and attributable; (2) reads become unlinkable to specific keys—even to endorsing peers.
+
+\subsection{KEY OBJECTIVE AND CONTRIBUTIONS}
+In this work, we demonstrate that CPIR can be implemented natively in chaincode to provide query privacy for Fabric reads 
+and achieve practical performance under certain parametrization choices.
+For our consortium setting we choose a typical Cyber Threat Intelligence (CTI) sharing scenario often implemented on Fabric~\cite{ref18_HLFCTI},
+where organizations exchange JSON-formatted threat indicators (hashes, IPs, metadata) and wish to keep
+their queries confidential.
+
+Our work closes the aforementioned gap by embedding a BGV-based PIR 
+workflow directly in Fabric’s evaluate path, ensuring that endorsing peers cannot infer queried indices while 
+preserving normal endorsement and auditability.
+
+Hence, the main contributions of this work are:
+\begin{enumerate}
+    \item \textbf{BGV-based CPIR as Fabric chaincode.} 
+    We present, to the best of our knowledge, the first fully functional integration 
+    of a lattice-based CPIR scheme into Fabric chaincode for query privacy.
+    \item \textbf{Feasibility constraints.} 
+    We derive necessary and sufficient conditions on the cryptographic parameters, database size, 
+    and record structure to ensure that polynomial packing is possible, facilitating practical deployment for CTI sharing and similar use cases.
+    \item \textbf{Multi-channel architecture.} 
+    We design a multi-channel Fabric architecture where each channel maintains an 
+    independent polynomial database and metadata, allowing different organizations to host separate datasets while reusing the same CPIR chaincode.
+    \item \textbf{Comprehensive evaluation.} 
+    We implement a prototype using the Lattigo library and benchmark cryptographic operations, 
+    blockchain interactions, and end-to-end query latency under various configurations. Our results show that single-query latencies 
+    remain practical for typical Fabric deployments.
+    \item \textbf{Open-Source Release.} To encourage reproducibility and use by other researchers, we open-source 
+    the complete CPIR-on-Blockchain system, including chaincode, client, and experimental setup. 
+    The repository is available at: \url{https://github.com/artias13/2_2_HLF_CPIR}.
+\end{enumerate}
 
 \subsection{ORGANIZATION}
 
-The remainder of this paper is organized as follows: Section~II surveys related work on PIR and blockchain privacy. Section~III presents the system model and threat assumptions. Section~IV details the design and implementation of CPIR in Fabric. Section~V evaluates performance. Section~VI discusses limitations and future directions, and Section~VII concludes the paper.
+The remainder of this paper is organized as follows: 
+Section~\ref{sec:preliminaries} reviews Fabric privacy features, PIR fundamentals, and BGV encryption.
+Section~\ref{sec:proposed_system} describes our system and threat models, polynomial database construction, feasibility constraints, multi-channel architecture, workflow and algorithms.
+Section~\ref{sec:evaluation} shows experimental setup, cryptographic and blockchain benchmarks, and overall system performance.
+Section~\ref{sec:discussion} discusses limitations and future directions, and Section~\ref{sec:conclusion} concludes the paper.
 
 \section{PRELIMINARIES}\label{sec:preliminaries}
 
-\subsection{TECHNOLOGY BACKGROUND}
+\subsection{FABRIC NATIVE PRIVACY FEATURES}
+We hereby acknowledge several native solutions for privacy that Hyperledger Fabric provides and explain why they do not fully address the query privacy problem.
 
-\emph{a) Fabric Native Privacy Techniques:}
-Hyperledger Fabric separates roles among endorsing peers, committing peers, and the ordering service. 
-Endorsing peers execute chaincode proposals and therefore observe function arguments, logs, and read-sets, making their administrators the natural adversaries for read privacy. 
-Protecting reads in Fabric thus requires hiding query intent from endorsers.
+\textbf{Separate Channels.} Multi-channel partitioning isolates ledgers across subgroups of organizations, limiting which participants observe which data. 
+However, channel separation controls \emph{who} sees a ledger, not \emph{what} is accessed inside that ledger. 
+Query intent remains visible to all endorsers of a channel.
 
-Fabric already offers several native privacy mechanisms, each addressing a different dimension of confidentiality:
-\begin{itemize}
-    \item \emph{Separate Channels.} Multi-channel partitioning isolates ledgers across subgroups of organizations, limiting which participants observe which data. 
-    However, channel separation controls \emph{who} sees a ledger, not \emph{what} is accessed inside that ledger. 
-    Query intent remains visible to all endorsers of a channel.
-    
-    \item \emph{Private Data Collections (PDC).} PDCs restrict which organizations store and access private key–value pairs. 
-    The shared ledger records only hashes, while members of the collection hold plaintext. 
-    PDCs provide access control but still expose function arguments to endorsers inside the collection, leaving query patterns observable.
-    
-    \item \emph{Fabric Private Chaincode (FPC).} FPC executes chaincode within Intel SGX enclaves. 
-    Arguments and state are protected even from peer operators, but this requires Trusted Execution Environments (TEEs) and attestation, introducing additional hardware and trust assumptions.
-\end{itemize}
+\textbf{Private Data Collections (PDC).} PDCs restrict which organizations store and access private key–value pairs. 
+The shared ledger records only hashes, while members of the collection hold plaintext. 
+PDCs provide access control but still expose function arguments to endorsers inside the collection, leaving query patterns observable.
 
-In summary, Fabric’s native privacy tools govern data visibility and execution confidentiality. 
-They are orthogonal to Private Information Retrieval (PIR): PDC and FPC restrict who can see data, while PIR hides what data is queried.
+\textbf{Fabric Private Chaincode (FPC).} FPC executes chaincode within Intel SGX enclaves. 
+Arguments and state are protected even from peer operators, but this requires Trusted Execution Environments (TEEs) and attestation, introducing additional hardware and trust assumptions.
 
+\subsection{FABRIC STORAGE LIMITS}
+We here address the question of how large a database can be stored in Fabric world state and ledger history, as this impacts the practical limits of our PIR construction.
 
-\emph{b) Private Information Retrieval Basics:}
-PIR protocols enable a client to retrieve a record without revealing which record was requested. 
-They fall into two categories:
+\textbf{World state (LevelDB/CouchDB).}
+Fabric imposes no hard limit on the number of key–value entries in world state; capacity depends on available disk space and peer I/O throughput.
+In our implementation, each channel maintains a few small keys:
+\texttt{"m\_DB"} (64–265~KB), \texttt{"n"}, \texttt{"record\_s"}, \texttt{"bgv\_params"}, and optional \texttt{"record\%03d"} JSON records.
+These sizes are well within the default LevelDB storage profile, which is optimized for high-speed local key–value operations.
+Although CouchDB can be used as an alternative (for rich JSON queries), it enforces a configurable \texttt{max\_document\_size} limit of 8~MB by default (up to 4~GB in recent versions of CouchDB~3.0+).
+Since our \emph{$m_{DB}$} values are below 300~KB, LevelDB is sufficient and preferable for performance and simplicity, while CouchDB remains compatible for future extensions that require JSON-based indexing.
 
-\emph{Information-Theoretic PIR (IT-PIR).} Provides unconditional privacy by distributing the database across multiple non-colluding servers. 
-A client queries subsets of servers such that no single server learns the selection index.
+\textbf{Ledger history (blockchain log).}
+Block size is constrained by the ordering service configuration. 
+By default, the Fabric orderer limits the serialized payload to \texttt{AbsoluteMaxBytes~=~10~MB} (recommended under 49~MB given the gRPC ceiling of 100~MB), 
+and typically aggregates up to \texttt{MaxMessageCount~=~500} transactions per block or \texttt{PreferredMaxBytes~=~2~MB}.
+In our system, these limits affect only \emph{submit} transactions such as \emph{InitLedger} or record updates. 
+\emph{Evaluate} transactions (including \emph{PIRQuery}) are read-only and do not generate blocks, thus unaffected by ordering or batching constraints.
 
-\emph{Computational PIR (CPIR).} Achieves privacy with a single server, relying on hardness assumptions and homomorphic encryption. 
-For a database $D=\{d_0,\dots,d_{n-1}\}$ and a one-hot selection vector $\hat{v}_i$, the client computes 
-\[
-ct_q = \text{Enc}_{pk}(\hat{v}_i), \qquad ct_r = ct_q \cdot D = \text{Enc}_{pk}(d_i).
-\]
-The server returns $c_r$, which the client decrypts as $d_i = \text{Dec}_{sk}(c_r)$. 
-Thus the queried index $i$ remains hidden from the server.
+\noindent\textbf{Implication.}
+The effective capacity of a channel is governed primarily by cryptographic feasibility (Fig.~\ref{fig:exp-matrix}) 
+and the size of a single world-state value (i.e., \emph{$m_{DB}$}), rather than by Fabric’s block or database limits. 
+For large or binary CTI objects (e.g., malware samples or full PCAPs), an optional extension is to store them off-chain in IPFS 
+while persisting only their content identifiers (CIDs) in world state, 
+keeping the polynomial \emph{$m_{DB}$} as the structured component used for private retrieval.
 
-CPIR avoids the need for multiple servers, making it attractive in blockchain settings where peers cannot be assumed non-colluding.
-%\noindent 
+\subsection{PRIVATE INFORMATION RETRIEVAL (PIR)}
 
-\emph{c) BGV Homomorphic Encryption:}
+\textbf{BGV Homomorphic Encryption:}
 Our construction relies on the Brakerski–Gentry–Vaikuntanathan (BGV) scheme, a lattice-based homomorphic encryption system supporting both addition and multiplication over ciphertexts. 
-BGV is defined over polynomial rings modulo a large ciphertext modulus and enables \emph{batching}, where multiple plaintext elements are packed into a single ciphertext. 
-In our design, this batching is used to embed the ledger’s key–value table into a single polynomial $m_{\mathrm{DB}}$, allowing efficient evaluation of structured PIR queries inside chaincode and underpins the polynomial database representation used in our Fabric integration.
-
-\subsection{NOTATION}
-We summarize the main notation used throughout the paper in Table~\ref{tab:notation}.
-
-\begin{table}[!t]
-    \caption{Notation}
-    \label{tab:notation}
-    \setlength{\tabcolsep}{3pt}
-    \renewcommand{\arraystretch}{1.1}
-        \begin{tabular}{|p{78pt}|p{170pt}|}
-        \hline
-        \textbf{Symbol} & \textbf{Description} \\
-        \hline
-        $\lambda$ & Security parameter \\
-        \hline
-        $n$ & Database size; index domain $[n]=\{0,\dots,n-1\}$ \\
-        \hline
-        $D=\{d_0,\dots,d_{n-1}\}$ & Database records (serialized bytes/words) \\
-        \hline
-        $m_{\mathrm{DB}}$ & Plaintext polynomial representation of $D$ (BGV batching) \\
-        \hline
-        $\hat{v}_i$ & One-hot selector for index $i$ (single 1, rest 0) \\
-        \hline
-        ${v}_i$ & Windowed selector for index $i$ with $record_s$ contiguous ones (retrieves full record window) \\
-        \hline
-        $pk,\, sk$ & Public / secret keys (BGV) \\
-        \hline
-        $ct_q=\mathsf{Enc}_{pk}(\hat{v}_i)$ & Encrypted query \\
-        \hline
-        $ct_r=\mathsf{Eval}(ct_q, m_{\mathrm{DB}})$ & Encrypted response \\
-        \hline
-        $d_i=\mathsf{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
-        \hline
-        $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$ & Key generation \\
-        \hline
-        $\mathsf{Enc}_{pk}(\cdot)$, $\mathsf{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
-        \hline
-        $\mathsf{Eval}(\cdot)$ & Homomorphic evaluation (ct–pt multiply) \\
-        \hline
-        $N=2^{\log N}$ & Ring dimension (polynomial degree of the scheme) \\
-        \hline
-        $\log Q_i$ & Bit-lengths of primes forming modulus chain $Q$ (ciphertext levels) \\
-        \hline
-        $\log P_i$ & Bit-lengths of special primes $P$ (used for key switching / relinearization) \\
-        \hline
-        $T$ & Plaintext modulus (NTT-friendly prime; Lattigo \texttt{PlaintextModulus}) \\
-        \hline
-        $record_s$ & Slots allocated per record (slot window size) \\
-        \hline
-        $record_b$ & Base serialized size of a record in bytes \\
-        \hline
-        $record_{\mu,\log N}$ & Template-specific minimum record size at security level $\log N$ \\
-        \hline
-        $\mathcal{S}$ & Allowed discrete slot sizes (implementation policy) \\
-        \hline
-        ${c}=(c_0,\dots,c_{N-1})$ & Coefficient vector of the polynomial encoding (slots of $m_{\mathrm{DB}}$) \\
-        \hline
-        $|\cdot|$, $\mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
-        \hline
-        $\mathsf{Cap}(N,s,n)$ & Capacity predicate: $n \cdot s \leq N$ \\
-        \hline
-        $\mathsf{Min}(\log N,s)$ & Template predicate: $s \geq record_{\mu,\log N}$ \\
-        \hline
-        $\mathsf{Disc}(s)$ & Discrete predicate: $s \in \mathcal{S}$ \\
-        \hline
-        $\mathsf{Cap} \wedge \mathsf{Min} \wedge \mathsf{Disc}$ & Feasibility condition for $(\log N,n,record_s)$ \\
-        \hline
-        $\mathcal{DO},\,\mathcal{DW},\,\mathcal{DR},\,\mathcal{GW}$ & Data Owner; Data Writer; Data Requester; Gateway \\
-        \hline
-        \textsf{evaluate}, \textsf{submit} & Fabric read / write transaction phases \\
-        \hline
-        $\mathcal{L}$ & Leakage considered (ciphertext size, protocol timing) \\
-        \hline
-        \end{tabular}
-    \end{table}
-    
-
-\subsection{CRYPTOGRAPHIC PRIMITIVES}
+BGV enables \emph{batching}, where multiple plaintext elements are packed into a single ciphertext. 
+In our design, this batching is used to embed the ledger’s key–value table into a single polynomial database representaion, 
+allowing efficient evaluation of structured PIR queries inside chaincode and underpins the polynomial database representation used in our Fabric integration.
 
 The Brakerski--Gentry--Vaikuntanathan (BGV) scheme defines operations over two polynomial rings: 
 a ciphertext ring $R_Q = \mathbb{Z}_Q[X]/(X^N+1)$ and a plaintext ring $R_T = \mathbb{Z}_T[X]/(X^N+1)$, 
 both sharing the same dimension $N=2^{\log N}$. 
 In our implementation, these rings are jointly specified by a single parameter literal 
 $(\log N, \log Q_i, \log P_i, T)$ as provided by the Lattigo library. 
-The field $T$ determines $R_T$, while the modulus chain $(Q,P)$ and their bit-lengths $(\log Q_i, \log P_i)$ determine $R_Q$.
+The field $T$ determines $R_T$, while the modulus chain $(Q,P)$ and their bit-lengths $(\log Q_i, \log P_i)$ 
+determine $R_Q$.
 
-We instantiate Computational PIR as a tuple of probabilistic polynomial-time algorithms
-\[
-\Pi = (\mathsf{KeyGen}, \mathsf{Enc}, \mathsf{Eval}, \mathsf{Dec}),
-\]
-defined as follows:
+\textbf{Our CPIR Instantiation:}
+We instantiate Computational PIR as a tuple of probabilistic polynomial-time algorithms (\emph{KeyGen}, 
+\emph{Enc}, \emph{Eval}, \emph{Dec}):
 \begin{itemize}
-    \item $\mathsf{KeyGen}(\lambda) \rightarrow (pk, sk)$: On input the security parameter $\lambda$, output a public key $pk$ and a secret key $sk$.
-    \item $\mathsf{Enc}_{pk}(\hat{v}_i) \rightarrow ct_q$: Given a windowed selection vector $\hat{v}_i \in \{0,1\}^N$, encode it into the plaintext ring $R_T$ and encrypt to a query ciphertext $ct_q$ under $pk$.
-    \item $\mathsf{Eval}(ct_q, m_{\mathrm{DB}}) \rightarrow ct_r$: Given $ct_q$ and the plaintext polynomial database $m_{\mathrm{DB}} \in R_T$, homomorphically evaluate the product to obtain an encrypted response $ct_r \in R_Q$.
-    \item $\mathsf{Dec}_{sk}(ct_r) \rightarrow d_i$: Using the secret key $sk$, decrypt the response ciphertext $ct_r$ to recover the desired record $d_i$.
+    \item $\emph{KeyGen}(\lambda) \rightarrow (pk, sk)$: On input the security parameter $\lambda$, output a public key $pk$ and a secret key $sk$.
+    \item $\emph{Enc}_{pk}(\hat{v}_i) \rightarrow ct_q$: Given a windowed selection vector $\hat{v}_i \in \{0,1\}^N$, encode it into the plaintext ring $R_T$ and encrypt to a query ciphertext $ct_q$ under $pk$.
+    \item $\emph{Eval}(ct_q, \emph{$m_{DB}$}) \rightarrow ct_r$: Given $ct_q$ and the plaintext polynomial database $\emph{$m_{DB}$} \in R_T$, homomorphically evaluate the product to obtain an encrypted response $ct_r \in R_Q$.
+    \item $\emph{Dec}_{sk}(ct_r) \rightarrow d_i$: Using the secret key $sk$, decrypt the response ciphertext $ct_r$ to recover the desired record $d_i$.
 \end{itemize}
 
 \noindent \textbf{Protocol objective.} 
 Correctness requires that for all $i \in [n]$,
 \[
-\mathsf{Dec}_{sk}\!\left(\mathsf{Eval}\!\left(\mathsf{Enc}_{pk}(\hat{v}_i), m_{\mathrm{DB}}\right)\right) = d_i.
+\emph{Dec}_{sk}\!\left(\emph{Eval}\!\left(\emph{Enc}_{pk}(\hat{v}_i), \emph{$m_{DB}$}\right)\right) = d_i.
 \]
 
 \noindent \textit{Remark (restricted operation set).} 
 The full BGV scheme also provides $\mathsf{EvalKeyGen}$ to generate relinearization and rotation keys, 
 supporting ciphertext–ciphertext multiplication, automorphisms, and modulus switching. 
 Our PIR construction requires only ciphertext–plaintext multiplication ($ct \times pt$), 
-since the database polynomial $m_{\mathrm{DB}}$ is kept in plaintext within world state. 
+since the database polynomial \emph{$m_{DB}$} is kept in plaintext within world state. 
 This avoids degree growth and level management, so we do not expose $\mathsf{EvalKeyGen}$ in chaincode. 
 Extending to ciphertext–ciphertext evaluation would require additional on-chain artifacts 
-(relinearization keys, Galois keys, encrypted $m_{\mathrm{DB}}$), larger world-state footprint, and higher evaluation cost, 
+(relinearization keys, Galois keys, encrypted \emph{$m_{DB}$}), larger world-state footprint, and higher evaluation cost, 
 which we leave as future work.
+
+\subsection{NOTATION}
+We summarize the main notation used throughout the paper in Table~\ref{tab:notation}.
+
+\begin{table}[!h]
+\caption{Notation}
+\label{tab:notation}
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.1}
+    \begin{tabular}{|l|l|}
+    \hline
+    \textbf{Symbol} & \textbf{Description} \\
+    \hline
+    $\lambda$ & Security parameter \\
+    \hline
+    $n$ & Database size; \\ & index domain $[n]=\{0,\dots,n-1\}$ \\
+    \hline
+    $D=\{d_0,\dots,d_{n-1}\}$ & Database records \\
+    \hline
+    \emph{$m_{DB}$} & Plaintext polynomial \\ & representation of $D$ \\
+    \hline
+    $\hat{v}_i$ & One-hot selector for index $i$ \\
+    \hline
+    ${v}_i$ & Windowed selector for index $i$ \\ & with $record_s$ contiguous ones \\
+    \hline
+    $pk,\, sk$ & Public / secret keys (BGV) \\
+    \hline
+    $ct_q=\emph{Enc}_{pk}(\hat{v}_i)$ & Encrypted query \\
+    \hline
+    $ct_r=\emph{Eval}(ct_q, \emph{$m_{DB}$})$ & Encrypted response \\
+    \hline
+    $d_i=\emph{Dec}_{sk}(ct_r)$ & Decrypted record $d_i$ retrieved by client \\
+    \hline
+    $\emph{KeyGen}(\lambda)\!\to\!(pk,sk)$ & Key generation \\
+    \hline
+    $\emph{Enc}_{pk}(\cdot)$, $\emph{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
+    \hline
+    $\emph{Eval}(\cdot)$ & Homomorphic evaluation \\ & (ct–pt multiply) \\
+    \hline
+    $N=2^{\log N}$ & Ring dimension \\ & \\
+    \hline
+    $\log Q_i$ & Bit-lengths of primes \\ & forming modulus chain $Q$ \\
+    \hline
+    $\log P_i$ & Bit-lengths of special \\ & primes $P$ \\
+    \hline
+    $T$ & Plaintext modulus \\
+    \hline
+    $record_s$ & Slots allocated per record \\
+    \hline
+    $record_b$ & Base serialized size of a record in bytes \\
+    \hline
+    $record_{\mu,\log N}$ & Template-specific minimum \\ & record size at security level $\log N$ \\
+    \hline
+    $\mathcal{S}$ & Allowed discrete slot sizes \\
+    \hline
+    ${c}=(c_0,\dots,c_{N-1})$ & Coefficient vector of \\ & the polynomial encoding (slots of \emph{$m_{DB}$}) \\
+    \hline
+    $|\cdot|$, $\mathrm{size}(\cdot)$ & Length in elements / size in bytes \\
+    \hline
+    $\mathsf{Cap}(N,s,n)$ & Capacity predicate: $n \cdot s \leq N$ \\
+    \hline
+    $\mathsf{Min}(\log N,s)$ & Template predicate: $s \geq record_{\mu,\log N}$ \\
+    \hline
+    $\mathsf{Disc}(s)$ & Discrete predicate: $s \in \mathcal{S}$ \\
+    \hline
+    $\mathsf{Cap} \wedge \mathsf{Min} \wedge \mathsf{Disc}$ & Feasibility condition \\
+    \hline
+    $\mathcal{DO},\,\mathcal{DW},\,\mathcal{DR},\,\mathcal{GW}$ & Data Owner; Data Writer; \\ & Data Requester; Gateway \\
+    \hline
+    \emph{evaluate}, \emph{submit} & Fabric read / write transaction phases \\
+    \hline
+    $\mathcal{L}$ & Leakage considered \\ & (ciphertext size, protocol timing) \\
+    \hline
+    \end{tabular}
+\end{table}
     
 \section{PROPOSED SYSTEM}\label{sec:proposed_system}
-The following subsections detail (i) the system and threat models, (ii) a system overview, 
-(iii) the polynomial database construction, (iv) feasibility constraints for parameter selection, 
-(v) multi-channel architecture, (vi) workflow details and main 5 algorithms.
-
 \subsection{SYSTEM MODEL}
 We introduce a blockchain-based query privacy system designed for permissioned ledgers. 
 The system enables clients to privately retrieve from the ledger while endorsing peers can evaluate read-only queries over encrypted inputs without learning which record was accessed.  
@@ -317,13 +340,13 @@ This approach ensures that clients remain the sole holders of decryption keys, w
 \noindent Our system is composed of the following entities:
 
 \begin{itemize}
-    \item \textbf{Data Owner ($\mathcal{DO}$):} Endorsing peers that hold the current plaintext polynomial $m_{\mathrm{DB}}$ in world state and execute PIR during \textsf{evaluate}. $\mathcal{DO}$ is honest-but-curious.
-    \item \textbf{Data Writer ($\mathcal{DW}$):} A client organization that provisions or refreshes the database. $\mathcal{DW}$ invokes \textsf{submit} to initialize the ledger (e.g., set $n$ and template bounds). Chaincode computes $record_s$, packs $D=\{d_0,\dots,d_{n-1}\}$, encodes it into $m_{\mathrm{DB}}$, and persists it.
-    \item \textbf{Data Requester ($\mathcal{DR}$):} A client that privately retrieves a record. $\mathcal{DR}$ runs $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$, forms $ct_q=\mathsf{Enc}_{pk}(v_i)$, calls \textsf{evaluate} \textsf{PIRQuery}, and later decrypts $ct_r$.
-    \item \textbf{Gateway ($\mathcal{GW}$):} The Fabric client/chaincode interface used by $\mathcal{DW}$ and $\mathcal{DR}$ to invoke \textsf{InitLedger}, \textsf{GetMetadata}, and \textsf{PIRQuery}. It follows standard Fabric semantics; no extra trust is assumed.
+    \item \textbf{Data Owner ($\mathcal{DO}$):} Endorsing peers that hold the current plaintext polynomial \emph{$m_{DB}$} in world state and execute PIR during \emph{evaluate}. $\mathcal{DO}$ is honest-but-curious.
+    \item \textbf{Data Writer ($\mathcal{DW}$):} A client organization that provisions or refreshes the database. $\mathcal{DW}$ invokes \emph{submit} to initialize the ledger (e.g., set $n$ and template bounds). Chaincode computes $record_s$, packs $D=\{d_0,\dots,d_{n-1}\}$, encodes it into \emph{$m_{DB}$}, and persists it.
+    \item \textbf{Data Requester ($\mathcal{DR}$):} A client that privately retrieves a record. $\mathcal{DR}$ runs $\emph{KeyGen}(\lambda)\!\to\!(pk,sk)$, forms $ct_q=\emph{Enc}_{pk}(v_i)$, calls \emph{evaluate} \emph{PIRQuery}, and later decrypts $ct_r$.
+    \item \textbf{Gateway ($\mathcal{GW}$):} The Fabric client/chaincode interface used by $\mathcal{DW}$ and $\mathcal{DR}$ to invoke \emph{InitLedger}, \emph{GetMetadata}, and \emph{PIRQuery}. It follows standard Fabric semantics; no extra trust is assumed.
 \end{itemize}
 
-\noindent\textit{Remark (world-state scope).} In Fabric, the "ledger" comprises the blockchain log and the world state. Our CPIR operates on the world state: $m_{\mathrm{DB}}$ encodes the latest key--value snapshot, not the historical transaction logs.
+\noindent\textit{Remark (world-state scope).} In Fabric, the "ledger" comprises the blockchain log and the world state. Our CPIR operates on the world state: \emph{$m_{DB}$} encodes the latest key--value snapshot, not the historical transaction logs.
 
 \subsection{THREAT MODEL}
 
@@ -331,8 +354,8 @@ Our design follows the standard \emph{honest-but-curious} adversarial model.
 We explicitly consider the following assumptions and threats:
 
 \begin{itemize}
-    \item \textbf{Endorsing peers ($\mathcal{DO}$).} Execute chaincode correctly but may try to infer the queried index from \textsf{evaluate} inputs or logs. They see $ct_q$, metadata, and $m_{\mathrm{DB}}$.
-    \item \textbf{Data Writer ($\mathcal{DW}$).} Issues initialization writes via \textsf{submit}. $\mathcal{DW}$ is not trusted with decryption keys and learns nothing about $\mathcal{DR}$’s queries. We assume $\mathcal{DW}$ follows the write protocol but is not relied upon for privacy.
+    \item \textbf{Endorsing peers ($\mathcal{DO}$).} Execute chaincode correctly but may try to infer the queried index from \emph{evaluate} inputs or logs. They see $ct_q$, metadata, and \emph{$m_{DB}$}.
+    \item \textbf{Data Writer ($\mathcal{DW}$).} Issues initialization writes via \emph{submit}. $\mathcal{DW}$ is not trusted with decryption keys and learns nothing about $\mathcal{DR}$’s queries. We assume $\mathcal{DW}$ follows the write protocol but is not relied upon for privacy.
     \item \textbf{External observers.} May eavesdrop on client–peer traffic. Without $sk$, $ct_q$ and $ct_r$ reveal nothing under BGV assumptions.
     \item \textbf{Out of scope.} Traffic analysis and timing side-channels; the only permitted leakage is $\mathcal{L}$ (ciphertext size and protocol timing).
 \end{itemize}
@@ -340,7 +363,6 @@ We explicitly consider the following assumptions and threats:
 \noindent \textbf{Security objective.} 
 For any $i\in[n]$, neither $\mathcal{DO}$ nor external observers can distinguish which $d_i$ is requested from $ct_q$ and $ct_r$.
 The only permissible leakage is ciphertext size and protocol timing, denoted collectively as $\mathcal{L}$.
-
 
 \subsection{SYSTEM OVERVIEW}
 
@@ -350,33 +372,33 @@ At a high level, the workflow consists of four stages, illustrated in Fig.~\ref{
 
 \begin{enumerate}
     \item \textbf{Ledger initialization.}
-    $\mathcal{DW}$ invokes \textsf{InitLedger} via $\mathcal{GW}$ using \textsf{submit}. Chaincode derives $record_s$ from $record_b$, packs $D$ into ${c}=(c_0,\dots,c_{N-1})$, encodes $m_{\mathrm{DB}}$, and stores $m_{\mathrm{DB}}$ and metadata in world state held by $\mathcal{DO}$.
+    $\mathcal{DW}$ invokes \emph{InitLedger} via $\mathcal{GW}$ using \emph{submit}. Chaincode derives $record_s$ from $record_b$, packs $D$ into ${c}=(c_0,\dots,c_{N-1})$, encodes \emph{$m_{DB}$}, and stores \emph{$m_{DB}$} and metadata in world state held by $\mathcal{DO}$.
     \item \textbf{Metadata discovery.}
-    $\mathcal{DR}$ calls \textsf{GetMetadata} via \textsf{evaluate} to obtain $n$, $record_s$, and BGV parameters needed to form a valid query.
+    $\mathcal{DR}$ calls \emph{GetMetadata} via \emph{evaluate} to obtain $n$, $record_s$, and BGV parameters needed to form a valid query.
     \item \textbf{Private retrieval.}
-    $\mathcal{DR}$ constructs $ct_q=\mathsf{Enc}_{pk}(v_i)$ and invokes \textsf{PIRQuery} via \textsf{evaluate}. $\mathcal{DO}$ computes $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})$ and returns it.
+    $\mathcal{DR}$ constructs $ct_q=\emph{Enc}_{pk}(v_i)$ and invokes \emph{PIRQuery} via \emph{evaluate}. $\mathcal{DO}$ computes $ct_r=\emph{Eval}(ct_q,\emph{$m_{DB}$})$ and returns it.
     \item \textbf{Decryption.}
-    $\mathcal{DR}$ decrypts $ct_r$ to recover $d_i=\mathsf{Dec}_{sk}(ct_r)$.
+    $\mathcal{DR}$ decrypts $ct_r$ to recover $d_i=\emph{Dec}_{sk}(ct_r)$.
 \end{enumerate}
 
 \begin{figure}[!t]
     \centering
     \includegraphics[width=\columnwidth]{figures/diagrams/1_workflow.png}
-    \caption{“Workflow. $\mathcal{DW}$ initializes the ledger via $\mathcal{GW}$, which triggers chaincode on endorsing peers ($\mathcal{DO}$). $\mathcal{DO}$ executes the protocol and persists state in world state ($m_{\mathrm{DB}}$, metadata, JSON records). $\mathcal{DR}$ later obtains metadata, submits $ct_q=\mathsf{Enc}{pk}(v_i)$, $\mathcal{DO}$ evaluates $ct_r=\mathsf{Eval}(ct_q,m{\mathrm{DB}})$ against world state, and $\mathcal{DR}$ decrypts to $d_i$.}
+    \caption{“Workflow. $\mathcal{DW}$ initializes the ledger via $\mathcal{GW}$, which triggers chaincode on endorsing peers ($\mathcal{DO}$). $\mathcal{DO}$ executes the protocol and persists state in world state (\emph{$m_{DB}$}, metadata, JSON records). $\mathcal{DR}$ later obtains metadata, submits $ct_q=\emph{Enc}{pk}(v_i)$, $\mathcal{DO}$ evaluates $ct_r=\emph{Eval}(ct_q,m{\mathrm{DB}})$ against world state, and $\mathcal{DR}$ decrypts to $d_i$.}
     \label{fig:system-overview}
 \end{figure}
 
 \subsection{POLYNOMIAL DATABASE CONSTRUCTION}
 
-To enable PIR queries over structured ledger data, we must embed records into a plaintext polynomial $m_{\mathrm{DB}}$ suitable for BGV evaluation. 
+To enable PIR queries over structured ledger data, we must embed records into a plaintext polynomial \emph{$m_{DB}$} suitable for BGV evaluation. 
 Our prototype adopts a fixed-width packing strategy, illustrated in Fig.~\ref{fig:polynomial-construction}, which proceeds in four steps.
 
 \begin{figure*}[!t]
     \centering
     \includegraphics[width=\textwidth]{figures/diagrams/2_polynomial_construction.png}
-    \caption{$m_{\mathrm{DB}}$ construction from JSON to plaintext polynomial. 
+    \caption{\emph{$m_{DB}$} construction from JSON to plaintext polynomial. 
     Each record is serialized to bytes, mapped into a fixed slot window $record_s$, and packed into a coefficient vector $c$. 
-    The vector is then encoded as a BGV plaintext polynomial $m_{\mathrm{DB}}$, which is stored in the Fabric world state.}
+    The vector is then encoded as a BGV plaintext polynomial \emph{$m_{DB}$}, which is stored in the Fabric world state.}
     \label{fig:polynomial-construction}
 \end{figure*}
 
@@ -406,15 +428,15 @@ Thus each record $d_i$ occupies a contiguous slot interval that can be privately
 \textbf{Step 4: Encode into Polynomial.} 
 Finally, the coefficient vector $d$ is encoded into a plaintext polynomial:
 \[
-m_{\mathrm{DB}}(X) = \sum_{j=0}^{N-1} c_j X^j \in R_t,
+\emph{$m_{DB}$}(X) = \sum_{j=0}^{N-1} c_j X^j \in R_t,
 \]
 where $R_t = \mathbb{Z}_t[X]/(X^N+1)$. 
 This polynomial serves as the plaintext database representation stored in the Fabric world state. 
-Endorsing peers operate over $m_{\mathrm{DB}}$ during PIR queries, while clients recover only the slots corresponding to their requested record.
+Endorsing peers operate over \emph{$m_{DB}$} during PIR queries, while clients recover only the slots corresponding to their requested record.
 
 \subsection{FEASIBILITY CONSTRAINTS}
 
-Embedding records into the plaintext polynomial $m_{\mathrm{DB}}$ is feasible only for parameter triples 
+Embedding records into the plaintext polynomial \emph{$m_{DB}$} is feasible only for parameter triples 
 $(\log N, n, record_s)$ that satisfy \emph{all} of the following constraints. 
 These constraints form a hierarchical relationship: template requirements dominate discrete allocation, 
 and both are ultimately bounded by ring capacity.
@@ -506,7 +528,7 @@ where $s=record_s$ and $N=2^{\log N}$. A configuration is feasible iff:
     \centering
     \includegraphics[width=\textwidth]{figures/diagrams/4_multi_channel_arc.png}
     \caption{Multi-channel CPIR architecture. 
-    Each channel instantiates a separate CPIR chaincode and maintains its own $m_{\mathrm{DB}}$ polynomial, 
+    Each channel instantiates a separate CPIR chaincode and maintains its own \emph{$m_{DB}$} polynomial, 
     parameterized by $\log N$. This allows compact, mid-size, and rich CTI records to coexist under the same Fabric network.}
     \label{fig:multi-channel}
 \end{figure*}
@@ -537,7 +559,7 @@ Here, $N=32768$ slots allow up to 512 records at $\leq 64$ bytes or 64 records a
 As shown in Fig.~\ref{fig:multi-channel}, each channel maintains its own PIR chaincode instance and world state. 
 The world state contains:
 \begin{itemize}
-    \item The \emph{polynomial view}: the packed plaintext polynomial $m_{\mathrm{DB}}$ under key \texttt{"m\_DB"}.
+    \item The \emph{polynomial view}: the packed plaintext polynomial \emph{$m_{DB}$} under key \texttt{"m\_DB"}.
     \item The \emph{normal view}: JSON records stored individually under keys \texttt{"record\%03d"} for auditability and interoperability with non-PIR chaincode.
     \item \emph{Metadata}: 
     \begin{itemize}
@@ -548,45 +570,24 @@ The world state contains:
 \end{itemize}
 
 \noindent\textit{Remark (ledger capacity).}
-A practical concern is the maximum size of the ledger when channels store both JSON records and the polynomial $m_{\mathrm{DB}}$. 
-In Hyperledger Fabric, two layers impose size-related limits: the \emph{world state} (LevelDB or CouchDB) and the \emph{blockchain history} managed by the ordering service.
-
-\textbf{a) World state (LevelDB/CouchDB).}
-Fabric imposes no hard limit on the number of key–value entries in world state; capacity depends on available disk space and peer I/O throughput.
-In our implementation, each channel maintains a few small keys:
-\texttt{"m\_DB"} (64–265~KB), \texttt{"n"}, \texttt{"record\_s"}, \texttt{"bgv\_params"}, and optional \texttt{"record\%03d"} JSON records.
-These sizes are well within the default LevelDB storage profile, which is optimized for high-speed local key–value operations.
-Although CouchDB can be used as an alternative (for rich JSON queries), it enforces a configurable \texttt{max\_document\_size} limit of 8~MB by default (up to 4~GB in recent versions of CouchDB~3.0+).
-Since our $m_{\mathrm{DB}}$ values are below 300~KB, LevelDB is sufficient and preferable for performance and simplicity, while CouchDB remains compatible for future extensions that require JSON-based indexing.
-
-\textbf{b) Ledger history (blockchain log).}
-Block size is constrained by the ordering service configuration. 
-By default, the Fabric orderer limits the serialized payload to \texttt{AbsoluteMaxBytes~=~10~MB} (recommended under 49~MB given the gRPC ceiling of 100~MB), 
-and typically aggregates up to \texttt{MaxMessageCount~=~500} transactions per block or \texttt{PreferredMaxBytes~=~2~MB}.
-In our system, these limits affect only \textsf{submit} transactions such as \textsf{InitLedger} or record updates. 
-\textsf{Evaluate} transactions (including \textsf{PIRQuery}) are read-only and do not generate blocks, thus unaffected by ordering or batching constraints.
-
-\noindent\textbf{Implication.}
-The effective capacity of a channel is governed primarily by cryptographic feasibility (Fig.~\ref{fig:exp-matrix}) 
-and the size of a single world-state value (i.e., $m_{\mathrm{DB}}$), rather than by Fabric’s block or database limits. 
-For large or binary CTI objects (e.g., malware samples or full PCAPs), an optional extension is to store them off-chain in IPFS 
-while persisting only their content identifiers (CIDs) in world state, 
-keeping the polynomial $m_{\mathrm{DB}}$ as the structured component used for private retrieval.
+A practical concern is the maximum size of the ledger when channels store both JSON records and the polynomial \emph{$m_{DB}$}. 
+In Hyperledger Fabric, two layers impose size-related limits: the \emph{world state} (LevelDB or CouchDB) and the \emph{blockchain history} managed by the ordering service, 
+refer to Section~\ref{sec:preliminaries} for details.
 
 \subsection{WORKFLOW DETAILS}
 
 The complete workflow of our CPIR-enabled Fabric system is driven by five algorithms 
 (Alg.~\ref{alg:initledger}–\ref{alg:decryptresult}), corresponding to the chaincode interface 
-(\textsf{InitLedger}, \textsf{GetMetadata}, \textsf{PIRQuery}) and the client-side routines 
+(\emph{InitLedger}, \emph{GetMetadata}, \emph{PIRQuery}) and the client-side routines 
 (\textsf{FormSelectionVector}, \textsf{DecryptResult}). 
 Figure~\ref{fig:system-overview} provides the high-level overview. 
 A Data Writer ($\mathcal{DW}$) provisions the database $D=\{d_0,\dots,d_{n-1}\}$, 
-a Data Owner ($\mathcal{DO}$) maintains the polynomial $m_{\mathrm{DB}}$ in world state and executes PIR evaluations, 
+a Data Owner ($\mathcal{DO}$) maintains the polynomial \emph{$m_{DB}$} in world state and executes PIR evaluations, 
 and a Data Requester ($\mathcal{DR}$) retrieves $d_i$ privately using homomorphic encryption.
 The detailed steps are as follows:
 \begin{enumerate}
     \item \textbf{DW submits initialization.}  
-    $\mathcal{DW}$ calls \textsf{InitLedger} (Alg.~\ref{alg:initledger}) via $\mathcal{GW}$ (\textsf{submit}) 
+    $\mathcal{DW}$ calls \emph{InitLedger} (Alg.~\ref{alg:initledger}) via $\mathcal{GW}$ (\emph{submit}) 
     with inputs $(n,\,record_{s}^{\mathcal{DW}})$ and an optional hint $(\log N,\log Q_i,\log P_i,T)$. 
     Here $record_{s}^{\mathcal{DW}}$ denotes the maximum JSON size anticipated by the writer. 
 
@@ -606,28 +607,28 @@ The detailed steps are as follows:
 
     \item \textbf{Pack and persist.}  
     Each $d_i$ is placed in a disjoint window $J_i=\{i\cdot record_s,\dots,(i+1)record_s-1\}$ of $c=(c_0,\dots,c_{N-1})$, 
-    zeros pad unused slots, and the polynomial $m_{\mathrm{DB}}(X)=\sum c_j X^j$ is encoded at max level. 
+    zeros pad unused slots, and the polynomial $\emph{$m_{DB}$}(X)=\sum c_j X^j$ is encoded at max level. 
     World state stores \texttt{"m\_DB"}, \texttt{"n"}, \texttt{"record\_s"}, and \texttt{"bgv\_params"} 
     plus optional \texttt{"record\%03d"} entries. 
 
     \item \textbf{DR discovers metadata.}  
-    $\mathcal{DR}$ calls \textsf{GetMetadata} (Alg.~\ref{alg:getmetadata}) via \textsf{evaluate} 
+    $\mathcal{DR}$ calls \emph{GetMetadata} (Alg.~\ref{alg:getmetadata}) via \emph{evaluate} 
     to obtain $(n,record_s,\log N,N,T,\log Q_i,\log P_i)$. 
     This enables reconstruction of the cryptographic context. 
 
     \item \textbf{DR instantiates crypto context.}  
-    From metadata, $\mathcal{DR}$ builds parameters, executes $\mathsf{KeyGen}(\lambda)\!\to\!(pk,sk)$, 
+    From metadata, $\mathcal{DR}$ builds parameters, executes $\emph{KeyGen}(\lambda)\!\to\!(pk,sk)$, 
     and prepares encoder/encryptor objects. 
 
     \item \textbf{Form and encrypt query.}  
     For index $i\in[n]$, $\mathcal{DR}$ runs \textsf{FormSelectionVector} (Alg.~\ref{alg:encryptquery}): 
-    define $J_i$, set ${v}_i$ with ones on $J_i$, encode to $m_q(X)$, encrypt as $ct_q=\mathsf{Enc}_{pk}({v}_i)$, 
+    define $J_i$, set ${v}_i$ with ones on $J_i$, encode to $m_q(X)$, encrypt as $ct_q=\emph{Enc}_{pk}({v}_i)$, 
     and serialize/Base64-encode. 
 
     \item \textbf{PIR query evaluation.}  
-    $\mathcal{DR}$ issues \textsf{PIRQuery}($ct_q^{B64}$) (Alg.~\ref{alg:pirquery}) via \textsf{evaluate}. 
-    $\mathcal{DO}$ decodes, reloads $m_{\mathrm{DB}}$ if necessary, and computes 
-    $ct_r=\mathsf{Eval}(ct_q,m_{\mathrm{DB}})$, returning the Base64-encoded ciphertext. 
+    $\mathcal{DR}$ issues \emph{PIRQuery}($ct_q^{B64}$) (Alg.~\ref{alg:pirquery}) via \emph{evaluate}. 
+    $\mathcal{DO}$ decodes, reloads \emph{$m_{DB}$} if necessary, and computes 
+    $ct_r=\emph{Eval}(ct_q,\emph{$m_{DB}$})$, returning the Base64-encoded ciphertext. 
 
     \item \textbf{Decryption and reconstruction.}  
     $\mathcal{DR}$ runs \textsf{DecryptResult} (Alg.~\ref{alg:decryptresult}) to recover $m'(X)$, 
@@ -638,7 +639,7 @@ The detailed steps are as follows:
 \noindent\textit{Remark (levels, noise, determinism).}
 Queries are encoded and encrypted at \emph{max level}. Chaincode evaluates a single ct–pt multiply (no relinearization).
 This keeps noise growth minimal and evaluation deterministic across endorsers, which is important for Fabric endorsement.
-If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns the same metadata blob; clients rebuild context idempotently.
+If \emph{$m_{DB}$} is re-encoded or refreshed, $\mathcal{GW}$ still returns the same metadata blob; clients rebuild context idempotently.
 
 \begin{algorithm}[!h]
     \caption{InitLedger (chaincode)}
@@ -671,8 +672,8 @@ If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns th
     \ENDFOR
 \ENDFOR
 
-    \STATE $m_{\mathrm{DB}}(X) \gets \encP{c} \in \mathbb{Z}_T[X]/(X^N+1)$
-    \STATE $worldState \gets \{m_{\mathrm{DB}},\;n,\;record_s,\;bgvParams,\;op:D\}$
+    \STATE $\emph{$m_{DB}$}(X) \gets \encP{c} \in \mathbb{Z}_T[X]/(X^N+1)$
+    \STATE $worldState \gets \{\emph{$m_{DB}$},\;n,\;record_s,\;bgvParams,\;op:D\}$
     \STATE \textbf{return} \textsc{ok}
     \end{algorithmic}
 \end{algorithm}
@@ -706,7 +707,7 @@ If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns th
     \STATE ${v}_i \in \{0,1\}^{N} \gets \mathbf{0}$
     \FOR{$j \in J_i$} \STATE ${v}_i[j] \gets 1$ \ENDFOR \hfill // windowed selector
     \STATE $m_q(X) \gets \encP{{v}_i}$ \hfill // polynomial encode at max level
-    \STATE $ct_q \gets \mathsf{Enc}_{pk}(m_q)$
+    \STATE $ct_q \gets \emph{Enc}_{pk}(m_q)$
     \STATE $ct_q^{B64} \gets \encB{\ser{ct_q}}$
     \STATE \textbf{return } $ct_q^{B64}$ \hfill // Base64(marshalled ciphertext)
     \end{algorithmic}
@@ -721,10 +722,10 @@ If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns th
         \STATE \textbf{return} $\bot$ 
     \ENDIF
     \STATE $ct_q \gets \des{\decB{(ct_q^{B64})}}$
-    \IF{$m_{\mathrm{DB}}$ not cached in memory}
-        \STATE $m_{\mathrm{DB}} \gets worldState.m_{\mathrm{DB}}$
+    \IF{\emph{$m_{DB}$} not cached in memory}
+        \STATE $\emph{$m_{DB}$} \gets worldState.\emph{$m_{DB}$}$
     \ENDIF
-    \STATE $ct_r \gets \mathsf{Eval}(ct_q, m_{\mathrm{DB}})$
+    \STATE $ct_r \gets \emph{Eval}(ct_q, \emph{$m_{DB}$})$
     \STATE $ct_r^{B64} \gets \encB{\ser{(ct_r)}}$
     \STATE \textbf{return} $ct_r^{B64}$
     \end{algorithmic}
@@ -738,7 +739,7 @@ If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns th
     \STATE \textbf{if } $i<0$ \textbf{ or } $i\ge n$ \textbf{ then return } $\bot$
     \STATE \textbf{if } $n\cdot record_s > N$ \textbf{ then return } $\bot$ \hfill // sanity
     \STATE $ct_r \leftarrow \des{\decB{(ct_r^{B64})}}$
-    \STATE $u \in \mathbb{Z}_T^{N} \leftarrow \decP{\,m'(X)\,} \leftarrow \mathsf{Dec}_{sk}(ct_r)$
+    \STATE $u \in \mathbb{Z}_T^{N} \leftarrow \decP{\,m'(X)\,} \leftarrow \emph{Dec}_{sk}(ct_r)$
     \STATE $J_i \leftarrow \{i\cdot record_s,\dots,(i+1)\cdot record_s-1\}$
     \STATE $b \leftarrow$ byte array // init empty buffer for record
     \FOR{$j \in J_i$}
@@ -752,11 +753,7 @@ If $m_{\mathrm{DB}}$ is re-encoded or refreshed, $\mathcal{GW}$ still returns th
 \end{algorithm}
 
 
-\section{PERFORMANCE EVALUATION}
-The following subsections detail (i) experimental setup and cryptographic benchmarks, 
-(ii) fabric integration becnhmarks, 
-(iii) discussion and comparison with related work.
-
+\section{PERFORMANCE EVALUATION}\label{sec:evaluation}
 \subsection{EXPERIMENTAL SETUP}
 
 All experiments were executed on a local Ubuntu~24.04 host running under WSL2 on an Intel~Core~i5-3380M~CPU 
@@ -784,112 +781,147 @@ cross-verified against peer logs for consistency.
 \subsection{CRYPTOGRAPHIC PERFORMANCE}
 
 \noindent\textbf{Parameter Configuration.}
-Table~\ref{tab:params} lists the main cryptographic parameters used in the evaluation, 
-including the ring dimension $N$, modulus chain $(\log Q_i, \log P_i)$, plaintext modulus $T$, 
-slot allocation $record_s$, number of records $n$, and selector type. 
+Table~\ref{tab:params} summarizes the BGV parameter sets used in our evaluation, 
+including the ring dimension $N$, ciphertext modulus chain $(\log Q_i, \log P_i)$, 
+plaintext modulus $T$, slot allocation $record_s$, and database size $n$. 
+Each configuration corresponds to one Fabric channel and maintains a feasible 
+packing ratio as defined in Section~\ref{sec:proposed_system}.
 
 \begin{table}[!h]
-    \caption{Default BGV Parameter Configuration per Channel}
-    \label{tab:params}
-    \centering
-    \begin{tabular}{|c|c|c|c|c|c|}
-    \hline
-    $N$ & $\log Q_i$ & $\log P_i$ & $T$ & $record_s$ & $n$  \\
-    \hline
-    $2^{13}$ & [54] & [54] & 65537 & 128 & 64 \\
-    $2^{14}$ & [54] & [54] & 65537 & 224 & 73 \\
-    $2^{15}$ & [54] & [54] & 65537 & 256 & 128 \\
-    \hline
-    \end{tabular}
+\caption{Default BGV Parameter Configuration per Channel}
+\label{tab:params}
+\centering
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+$N$ & $\log Q_i$ & $\log P_i$ & $T$ & $record_s$ & $n$  \\
+\hline
+$2^{13}$ & [54] & [54] & 65537 & 128 & 64 \\
+$2^{14}$ & [54] & [54] & 65537 & 224 & 73 \\
+$2^{15}$ & [54] & [54] & 65537 & 256 & 128 \\
+\hline
+\end{tabular}
 \end{table}
 
+\noindent\textbf{Overall Results.}
+Figure~\ref{fig:latency-stages} consolidates the main cryptographic evaluation metrics:
+(A)~end-to-end latency by algorithmic stage,
+(B)~serialized artifact size, and
+(C)~slot utilization ratio within the packed database polynomial \emph{$m_{DB}$}.
 
-\noindent \textbf{End-to-End Latency by Stage.} Figure~\ref{fig:latency-stages} presents the breakdown of single-query latency 
-across cryptographic operations for each ring size. 
+\emph{(A) End-to-end latency by stage.}  
+Each bar shows the average latency per query at a given ring size $N=2^{\log N}$, 
+divided into four stages: \emph{KeyGen} (parameter setup and keypair generation),
+\emph{Enc} (selector encoding and encryption), 
+\emph{Eval} (homomorphic multiplication $ct\times pt$),
+and \emph{Dec} (decryption and record reconstruction). 
+All measurements were averaged over 20~executions.
 
-\noindent \textbf{Artifact Size Analysis.} Figure~\ref{fig:artifact-sizes} reports the serialized size (in kilobytes) 
-of the main cryptographic artifacts: the public and secret keys, the encrypted selector $ct_q$, the encrypted response $ct_r$,
-the plaintext database polynomial $m_{\mathrm{DB}}$, and the metadata JSON object.
+\emph{(B) Artifact size.}  
+This plot reports the serialized sizes (in~KB) of core artifacts:
+the public key, secret key, encrypted selector~$ct_q$, encrypted response~$ct_r$, 
+plaintext database polynomial~\emph{$m_{DB}$}, and the metadata JSON object. 
+Base64 serialization introduces an additional $\sim33\%$ overhead, 
+which is reflected in the reported wire sizes.
 
-\noindent \textbf{Slot Utilization.}Figure~\ref{fig:scaling} illustrates the proportion of utilized versus 
-unutilized slots across different ring sizes $N=2^{\log N}$.
-Utilization $u=(n \cdot record_s)/N$ measures how efficiently plaintext slots are 
-allocated within the polynomial database $m_{\mathrm{DB}}$.
+\emph{(C) Slot utilization.}  
+The final plot illustrates the fraction of utilized versus unutilized plaintext slots 
+across all tested rings. Utilization $u=(n\cdot record_s)/N$ quantifies packing efficiency 
+within \emph{$m_{DB}$}, which remains above~99\% across configurations.
 
-\begin{figure}[!h]
-    \centering
-    \includegraphics[width=\columnwidth]{figures/plots/e2e_latency_stacked.pdf}
-    \caption{End-to-end single-query latency by stage; \texttt{ct×pt} path.}
-    \label{fig:latency-stages}
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/plots/plate_col.pdf}
+\caption{Cryptographic performance of the BGV-based CPIR system: 
+(A)~latency by algorithmic stage, (B)~artifact size by ring configuration, and 
+(C)~allocated-slot utilization.}
+\label{fig:latency-stages}
 \end{figure}
-
-\begin{figure}[!h]
-    \centering
-    \includegraphics[width=\columnwidth]{figures/plots/artifacts_sizes.pdf}
-    \caption{Size of main cryptographic artifacts.}
-    \label{fig:artifact-sizes}
-\end{figure}
-
-\begin{figure}[!h]
-    \centering
-    \includegraphics[width=\columnwidth]{figures/plots/scaling_util_utilization_stacked.pdf}
-    \caption{Allocated-slot utilization by ring. Each bar shows the fraction of utilized versus unutilized slots in $m_{\mathrm{DB}}$.}
-    \label{fig:scaling}
-\end{figure}
-
-\noindent Having characterized the cryptographic performance of the BGV-based CPIR scheme 
-in isolation—covering latency, artifact size, and slot utilization—we now turn to its 
-\textbf{on-chain execution behavior within Hyperledger Fabric}. 
-The following subsection measures the performance of the chaincode functions 
-(\textsf{InitLedger}, \textsf{GetMetadata}, and \textsf{PIRQuery}) 
-across channels, focusing on peer-side latency, throughput, and world-state footprint.
 
 \subsection{BLOCKCHAIN PERFORMANCE}
 
 \begin{figure*}[!ht]
     \centering
     \includegraphics[width=\textwidth]{figures/plots/plate_wide3x2.pdf}
-    \caption{$m_{\mathrm{DB}}$ construction from JSON to plaintext polynomial. 
-    Each record is serialized to bytes, mapped into a fixed slot window $record_s$, and packed into a coefficient vector $c$. 
-    The vector is then encoded as a BGV plaintext polynomial $m_{\mathrm{DB}}$, which is stored in the Fabric world state.}
-    \label{fig:polynomial-construction}
+    \caption{Blockchain-side evaluation of the CPIR system across three Fabric channels.
+    (A–C)~Storage-level metrics: block and world-state composition. 
+    (D–F)~Peer-level resource utilization: CPU, memory, and network I/O per function.}
+    \label{fig:blockchain-metrics}
 \end{figure*}
 
-\textbf{a) Chaincode Execution Timings.}
-Figure~\ref{fig:chaincode-timings} and Table~\ref{tab:chaincode-timings} summarize the average \textit{server-side execution time} of 
-the main chaincode functions across different ring sizes $N=2^{\log N}$. 
+\noindent\textbf{Blockchain performance.} Figure~\ref{fig:blockchain-metrics} summarizes the performance of the 
+CPIR chaincode within Hyperledger~Fabric across three channels, each corresponding to a different ring size $N$ and 
+record configuration. The six subplots report storage breakdowns and peer-level resource utilization, 
+capturing both ledger-side and runtime characteristics of the system.
 
-\begin{table}[!h]
-    \caption{Average chaincode execution time (ms) per function and ring size}
-    \label{tab:chaincode-timings}
-    \centering
-    \begin{tabular}{|c|c|c|c|}
-    \hline
-    $\log N$ & \texttt{InitLedger} & \texttt{GetMetadata} & \texttt{PIRQuery} \\
-    \hline
-    13 & 165.24 & 6.16 & 12.53 \\
-    14 & 187.03 & 8.31 & 18.17 \\
-    15 & 307.87 & 5.94 & 40.36 \\
-    \hline
-    \end{tabular}
-\end{table}
+\emph{(A) Block size breakdown.}  
+This plot shows the total block payload produced by \emph{InitLedger}, 
+decomposed into the serialized polynomial \emph{$m_{DB}$}, metadata, JSON entries (estimated), 
+and Fabric overhead. Only \emph{InitLedger} produces blocks since 
+\emph{GetMetadata} and \emph{PIRQuery} are evaluate-type transactions.
 
-\begin{figure}[!h]
-    \centering
-    \includegraphics[width=\columnwidth]{figures/plots/chaincode_timings_bw.pdf}
-    \caption{Average chaincode execution time by function and ring size. Each bar represents the mean execution time over multiple epochs.}
-    \label{fig:chaincode-timings}
+\emph{(B) World-state (LevelDB) breakdown.}  
+The on-chain world-state footprint mirrors the block structure, 
+storing each entry as a key–value pair.  
+The main contributors are the packed database polynomial \emph{$m_{DB}$} and 
+per-record metadata entries, with negligible LevelDB index overhead.
+
+\emph{(C) Block vs. world-state size.}  
+This comparison illustrates the relative proportions of block payloads 
+and their persisted world-state representations.  
+The near-linear growth across channels reflects the increased plaintext vector size 
+required to encode larger $record_s$ and $n$ configurations.
+
+\emph{(D) Peer CPU utilization.}  
+Average CPU usage for each function (\emph{InitLedger}, \emph{GetMetadata}, \emph{PIRQuery}) 
+is shown per channel. \emph{PIRQuery} exhibits the highest CPU activity due to homomorphic 
+evaluation and ciphertext serialization, while \emph{InitLedger} remains dominant for write-heavy workloads.
+
+\emph{(E) Peer memory utilization.}  
+Memory usage stays below 1.5\% across all cases.  
+Peak values correspond to \emph{InitLedger} in \emph{mid} and \emph{rich} channels, 
+where large plaintext arrays and encoding buffers are instantiated during 
+database packing and state commits.
+
+\emph{(F) Peer network I/O.}  
+This plot reports the average data exchanged between the peer and client per epoch.  
+\emph{PIRQuery} incurs the largest network transfer, driven by the Base64-encoded ciphertexts 
+($ct_q$, $ct_r$), whereas metadata retrieval and ledger initialization are comparatively light.
+
+\noindent\textbf{Chaincode Execution Timings.} Figure~\ref{fig:chaincode-timings} and Table~\ref{tab:chaincode-timings} summarize the 
+average \textit{server-side execution time} of the main chaincode functions across different ring sizes.
+
+\begin{figure}[!h] 
+    \centering 
+    \includegraphics[width=\columnwidth]{figures/plots/chaincode_timings_bw.pdf} 
+    \caption{Average chaincode execution time by function and ring size. Each bar represents the 
+    mean execution time over multiple epochs.} \label{fig:chaincode-timings} 
 \end{figure}
 
-\noindent \textit{Remark (Submittion paths reminder).} 
-Transactions that modify world state (e.g., \textsf{InitLedger}) 
-are issued via the \textsf{submit} path and commit through Raft consensus, 
-while read-only operations (\textsf{GetMetadata}, \textsf{PIRQuery}) 
-use the \textsf{evaluate} path, which bypasses ordering and block creation. 
+\noindent\textit{Remark (execution paths).}  
+Transactions that modify world state (e.g., \emph{InitLedger}) are issued via the 
+\emph{submit} path and committed through Raft consensus, 
+while read-only operations (\emph{GetMetadata}, \emph{PIRQuery}) use the 
+\emph{evaluate} path, bypassing block creation and ordering.  
+All metrics are averaged over 20~executions under identical peer configurations.
 
-\subsection{DISCUSSION}
+\subsection{OVERALL SYSTEM PERFORMANCE}
 
-The results, summarized in Table~\ref{tab:crypto-times}, highlight a nearly linear growth trend in total latency with respect to $\log N$.
+\begin{figure*}[!ht]
+    \centering
+    \includegraphics[width=\textwidth]{figures/diagrams/5_query_privacy.png}
+    \caption{Detailed execution logs illustrating the privacy-preserving query workflow.
+    Left: peer-side chaincode logs showing InitLedger, GetMetadata, and PIR evaluation with 
+    ciphertext-plaintext multiplication.
+    Right: client-side logs showing metadata retrieval, query encryption, PIR query invocation, 
+    and decryption of the result.}
+    \label{fig:query-privacy}
+\end{figure*}
+
+The experimental results collectively demonstrate that the proposed BGV-based CPIR design achieves
+consistent end-to-end performance within practical bounds for permissioned blockchains. 
+Cryptographic evaluation (Table~\ref{tab:crypto-times}) shows that as $\log N$ increases from 13 to 15, 
+KeyGen latency roughly doubles and encryption and evaluation times grow proportionally to the ring size, 
+while decryption remains below~16~ms. 
 
 \begin{table}[!h]
     \caption{Execution Time of Cryptographic Operations (ms)}
@@ -906,12 +938,12 @@ The results, summarized in Table~\ref{tab:crypto-times}, highlight a nearly line
     \end{tabular}
 \end{table}
 
-\noindent The \emph{KeyGen} dominates at small scales due to keypair initialization and parameter validation in \texttt{Lattigo}. 
-\emph{Enc} and \emph{Eval} exhibit moderate scaling with ring size, reflecting the $O(N\log N)$ cost of NTT-based polynomial arithmetic. 
-\emph{Dec} remains lightweight, averaging under 16~ms even for $N=2^{15}$, confirming that decryption and slot extraction overheads are negligible. 
-Overall, end-to-end query latency remains below 200~ms for all configurations, demonstrating that CPIR can be feasibly embedded within Fabric’s \textsf{evaluate} transaction path.
-
-Table~\ref{tab:artifact-sizes} lists the corresponding averages for each $\log N$ configuration.
+Artifact size in (Fig.~\ref{fig:latency-stages}B) and Table~\ref{tab:artifact-sizes} scales linearly with the ring dimension $N$, 
+public and secret keys exhibit a 2$\times$ growth per level, consistent with BGV’s
+key structure. Ciphertexts ($ct_q$, $ct_r$) approximately double in size with each
+increment in $\log N$, while the plaintext polynomial \emph{$m_{DB}$} occupies
+roughly half of a ciphertext’s footprint. Metadata remains negligible in size
+($< 0.1$~KB).
 
 \begin{table}[!h]
     \caption{Size of Main Cryptographic Artifacts (KB)}
@@ -919,7 +951,7 @@ Table~\ref{tab:artifact-sizes} lists the corresponding averages for each $\log N
     \centering
     \begin{tabular}{|c|c|c|c|c|c|c|}
     \hline
-    $\log N$ & pk & sk & $ct_q$ & $ct_r$ & $m_{\mathrm{DB}}$ & Metadata \\
+    $\log N$ & pk & sk & $ct_q$ & $ct_r$ & \emph{$m_{DB}$} & Metadata \\
     \hline
     13 & 256.1 & 128.0 & 128.3 & 128.3 & 64.3 & 0.08 \\
     14 & 512.1 & 256.0 & 256.3 & 256.3 & 128.3 & 0.08 \\
@@ -927,39 +959,87 @@ Table~\ref{tab:artifact-sizes} lists the corresponding averages for each $\log N
     \hline
     \end{tabular}
 \end{table}
-As expected, artifact sizes scale linearly with the ring dimension $N = 2^{\log N}$.
-Public and secret keys exhibit a 2$\times$ growth per level, consistent with BGV’s
-key structure. Ciphertexts ($ct_q$, $ct_r$) approximately double in size with each
-increment in $\log N$, while the plaintext polynomial $m_{\mathrm{DB}}$ occupies
-roughly half of a ciphertext’s footprint. Metadata remains negligible in size
-($< 0.1$~KB). Base64 serialization introduces a $\sim$33\% wire overhead but does not
-affect the underlying cryptographic representation.
 
-\texttt{InitLedger} exhibits the largest execution time, reflecting the cost of initializing and inserting a large batch of encoded CTI records into the ledger world state. 
-\texttt{PIRQuery} remains sublinear with respect to initialization, reflecting the cost of single-query PIR evaluation, which depends on homomorphic multiplication and slot decoding for the given ring dimension. 
-\texttt{GetMetadata}, in contrast, executes quickly ($<10$\,ms on average) since it only retrieves pre-initialized ledger parameters without heavy computation.
-As expected, increasing $\log N$ leads to a monotonic rise in execution time for the PIR-related operations, with the most pronounced growth between $\log N=14$ and $\log N=15$.
+On-chain benchmarks (Table~\ref{tab:chaincode-timings}) reveal that 
+\emph{PIRQuery} consistently remains lightweight ($<$45~ms), 
+and read-only transactions avoid block creation overhead. 
+Overall, utilization above~99\% (Fig.~\ref{fig:latency-stages}C) confirms efficient slot packing across all channels, 
+while peer CPU and memory usage (Fig.~\ref{fig:blockchain-metrics}D–E) remain modest even under cryptographic load. 
+\begin{table}[!h]
+    \caption{Average Chaincode Execution Time (ms)}
+    \label{tab:chaincode-timings}
+    \centering
+    \begin{tabular}{|c|c|c|c|}
+    \hline
+    $\log N$ & \texttt{InitLedger} & \texttt{GetMetadata} & \texttt{PIRQuery} \\
+    \hline
+    13 & 165.24 & 6.16 & 12.53 \\
+    14 & 187.03 & 8.31 & 18.17 \\
+    15 & 307.87 & 5.94 & 40.36 \\
+    \hline
+    \end{tabular}
+\end{table}
 
-Across all configurations, utilization remains above $98\%$, indicating near-optimal packing under the feasibility constraints of Fig.~\ref{fig:exp-matrix}.
-Slight underutilization (e.g., $u\approx0.984$) arises from rounding of slot windows to the nearest discrete size in $\mathcal{S}={64,128,224,256,384,512}$, ensuring consistent record alignment and deterministic indexing.
+\noindent\textbf{End-to-End Workflow Summary.}
+Based on the data in Table \ref{tab:crypto-times} and Table \ref{tab:chaincode-timings}, 
+we now to summarize two main operational workflows in the system, involving $\mathcal{DW}$ and $\mathcal{DR}$, 
+while $\mathcal{DO}$ is implicitly involved as the executing peer during private queries.
+
+The first workflow corresponds to $\mathcal{DW}$ initializing the ledger through \emph{InitLedger}, 
+which packs and encodes the plaintext database \emph{$m_{DB}$} into world state. 
+
+The second workflow corresponds to $\mathcal{DR}$ performing a private query by sequentially 
+executing \emph{GetMetadata} → \emph{KeyGen} → \emph{Enc} → \emph{PIRQuery} → \emph{Dec}.
+The PIR evaluation itself is performed by $\mathcal{DO}$ (endorsing peer) using ciphertext-plaintext 
+multiplication during the evaluate transaction.
+
+Table~\ref{tab:end2end} summarizes the cryptographic and blockchain timings for both workflows, 
+averaged across all three channel configurations.
+\begin{table}[!h]
+    \caption{End-to-End Performance Analysis (ms)}
+    \label{tab:end2end}
+    \centering
+    \begin{tabular}{|l|c|c|c|}
+    \hline
+    \textbf{Workflow} & 
+    \shortstack{\textbf{Cryptographic} \\ \textbf{Operations (ms)}} & 
+    \shortstack{\textbf{Blockchain} \\ \textbf{Operations (ms)}} & 
+    \shortstack{\textbf{Total Time} \\ \textbf{(ms)}} \\
+    \hline
+    $\mathcal{DW}$'s Upload  & 0.0 & 220.0 & 220.0 \\
+    $\mathcal{DR}$'s Query  & 82.4 & 30.5 & 112.9 \\
+    \hline
+    \end{tabular}
+\end{table}
+
+While the \emph{InitLedger} operation incurs higher cost due to state updates and ordering, 
+the end-to-end query workflow completes within $\approx$113~ms on average.
+Additionally, Figure \ref{fig:query-privacy} illustrates the peer- and client-side execution during a PIR query. 
+While the endorsing peer observes only the ciphertext size and ring parameters, the actual queried index 
+remains hidden.
+
+These results demonstrate the practicality of integrating CPIR based on the BGV scheme into 
+Hyperledger Fabric chaincode for privacy-preserving reads from world state database using the 
+ciphertext-plaintext multiplication in evaluate type transactions. 
+
+\section{DISCUSSION}\label{sec:discussion}
+
+Our proposed framework integrates a BGV-based Computational PIR (CPIR) mechanism directly into 
+Hyperledger Fabric chaincode. By leveraging ciphertext-plaintext multiplication during evaluate transactions, 
+it enables privacy-preserving reads from the ledger without modifying Fabric’s transaction flow or consensus layer.
+This design allows query privacy to be achieved while maintaining low on-chain computation overhead and 
+compatibility with existing Fabric deployments.
 
 
-\section{CONCLUSION}
+- additional operation in workflow (addRecord) + consequences for the design (refresh, re-encoding, etc)
+- selective field-level retrieval (adaptive packing with variable slot windows)
+- Lemma/theorem layer (constraints, correctness, security).
+- world-state vs. IPFS mention
+- dual mode for cpir (world state vs. blockchain history data)
+- relinearization for ct x ct evaluation
+
+\section{CONCLUSION}\label{sec:conclusion}
 The conclusion goes here.
-
-\section*{APPENDIX}
-Appendixes, if needed, appear before the acknowledgment.
-
-
-\section*{ACKNOWLEDGMENT}
-The preferred spelling of the word ``acknowledgment'' in
-American English is without an ``e'' after the ``g.'' Use the
-singular heading even if you have many acknowledgments.
-Avoid expressions such as ``One of us (S.B.A.) would like
-to thank . . . .'' Instead, write ``F. A. Author thanks . . . .'' In
-most cases, sponsor and financial support acknowledgments
-are placed in the unnumbered footnote on the first page, not
-here.
 
 %\section*{REFERENCES}
 
