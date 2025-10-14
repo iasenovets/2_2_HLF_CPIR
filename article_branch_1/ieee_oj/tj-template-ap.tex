@@ -54,13 +54,13 @@
 
 \begin{abstract}
     Permissioned blockchains ensure integrity and auditability of shared data but expose query parameters to endorsing peers during read operations. 
-    In Hyperledger Fabric, evaluate calls are executed by peers who observe function arguments and read-sets, creating privacy risks for organizations querying sensitive records. 
-    We address this gap by presenting the first practical integration of Computational Private Information Retrieval (CPIR) into Fabric chaincode. 
-    Our design encodes the ledger’s key–value table as a plaintext polynomial and allows clients to submit encrypted selection vectors, evaluated under the Brakerski--Gentry--Vaikuntanathan (BGV) homomorphic encryption scheme. 
-    Peers return only encrypted responses, preventing index leakage while preserving normal Fabric endorsement and audit flows. 
-    We prototype the system with the Lattigo library and benchmark client-side encryption/decryption, peer-side evaluation, ciphertext size, and end-to-end query latency. 
-    Results show that single-query latencies remain practical for typical Fabric deployments, while eliminating the privacy leakage of baseline operations. 
-    This work demonstrates the feasibility of embedding CPIR directly into permissioned blockchains and provides a foundation for future enhancements such as post-quantum schemes, zero-knowledge proofs, and sublinear retrieval.
+    In Hyperledger Fabric, \textsf{evaluate} transactions reveal function arguments and read-sets to peers, creating privacy risks for organizations querying sensitive records. 
+    We address this gap by presenting the first full integration of Computational Private Information Retrieval (CPIR) within Fabric’s chaincode layer. 
+    Our design encodes the ledger’s key–value table as a packed plaintext polynomial and enables clients to submit encrypted selection vectors evaluated under the Brakerski–Gentry–Vaikuntanathan (BGV) homomorphic encryption scheme. 
+    Peers perform ciphertext–plaintext evaluation entirely inside chaincode and return encrypted results, preventing index leakage while preserving Fabric’s endorsement and audit semantics. 
+    A prototype built with the Lattigo library achieves end-to-end query latency of $\approx$113~ms and peer-side evaluation below~45~ms for databases of up to~128~records, demonstrating practical performance within permissioned environments. 
+    Network measurements indicate $\approx$2~MB of peer traffic per query due to the external chaincode model, which can be halved under in-process deployment. 
+    Overall, the results confirm the feasibility of native CPIR execution in Hyperledger Fabric and establish a foundation for scalable extensions such as constant-time evaluation, sublinear and sharded PIR, and encrypted-database (\emph{ct×ct}) computation for richer private analytics.
 \end{abstract}
     
 
@@ -115,12 +115,10 @@ not limited to any specific domain or blockchain platform.
 
 Xie et al.~\cite{xie_private_2023} design BIT-PIR, a PIR-based query scheme tailored to Bitcoin light clients: they restructure 
 on-chain data and craft a storage format so lightweight wallets can privately fetch transaction-related items without Bloom-filter leakage. 
-Their results indicate practical bandwidth/latency while hiding address/transaction interests from full nodes, 
-improving over classic SPV privacy. A caveat is deployment realism: the scheme assumes auxiliary storage/indices and 
-modified server roles, and the paper does not evaluate coexistence with competing light-client stacks (e.g., Neutrino) at Internet scale.
+This work is pioneering in applying PIR to public blockchains, but its reliance on Bitcoin's UTXO model limits generalizability to other platforms. 
 
-Chhabra et al. and Kumar introduced a series of PIR–blockchain frameworks across multiple domains, 
-including PRIBANI, MUDRA, DEBPIR, and BRON. PRIBANI~\cite{chhabra_pribani_2024} combines PIR with ring signatures and PEKS to 
+Chhabra et al. and Kumar introduced a series of PIR - blockchain frameworks across multiple domains, such as
+PRIBANI, MUDRA, DEBPIR, and BRON. PRIBANI~\cite{chhabra_pribani_2024} combines PIR with ring signatures and PEKS to 
 enhance query anonymity in transaction systems. MUDRA~\cite{chhabra_mudra_2025} integrates dual-server Ring-PIR within Hyperledger Fabric 
 to enable private access to healthcare records, while DEBPIR~\cite{kumar_debpir_2025} embeds PIR and k-out-of-N OT 
 in Fabric chaincode for privacy-preserving business data retrieval. BRON~\cite{kumar_bron_2024} extends this approach 
@@ -628,8 +626,8 @@ The detailed steps are as follows:
     \item \textbf{Pack and persist.}  
     Each $d_i$ is placed in a disjoint window $J_i=\{i\cdot record_s,\dots,(i+1)record_s-1\}$ of $c=(c_0,\dots,c_{N-1})$, 
     zeros pad unused slots, and the polynomial $\emph{$m_{DB}$}(X)=\sum c_j X^j$ is encoded at max level. 
-    World state stores \texttt{"m\_DB"}, \texttt{"n"}, \texttt{"record\_s"}, and \texttt{"bgv\_params"} 
-    plus optional \texttt{"record\%03d"} entries. 
+    World state stores \emph{"m\_DB"}, \emph{"n"}, \emph{"record\_s"}, and \emph{"bgv\_params"} 
+    plus optional \emph{"record\%03d"} entries. 
 
     \item \textbf{DR discovers metadata.}  
     $\mathcal{DR}$ calls \emph{GetMetadata} (Alg.~\ref{alg:getmetadata}) via \emph{evaluate} 
@@ -641,7 +639,7 @@ The detailed steps are as follows:
     and prepares encoder/encryptor objects. 
 
     \item \textbf{Form and encrypt query.}  
-    For index $i\in[n]$, $\mathcal{DR}$ runs \textsf{FormSelectionVector} (Alg.~\ref{alg:encryptquery}): 
+    For index $i\in[n]$, $\mathcal{DR}$ runs \emph{FormSelectionVector} (Alg.~\ref{alg:encryptquery}): 
     define $J_i$, set ${v}_i$ with ones on $J_i$, encode to $m_q(X)$, encrypt as $ct_q=\emph{Enc}_{pk}({v}_i)$, 
     and serialize/Base64-encode. 
 
@@ -651,7 +649,7 @@ The detailed steps are as follows:
     $ct_r=\emph{Eval}(ct_q,\emph{$m_{DB}$})$, returning the Base64-encoded ciphertext. 
 
     \item \textbf{Decryption and reconstruction.}  
-    $\mathcal{DR}$ runs \textsf{DecryptResult} (Alg.~\ref{alg:decryptresult}) to recover $m'(X)$, 
+    $\mathcal{DR}$ runs \emph{DecryptResult} (Alg.~\ref{alg:decryptresult}) to recover $m'(X)$, 
     extract bytes from $J_i$, stop at padding zero, and reconstruct $d_i$ as a valid JSON object 
     (or a scalar if $record_s=1$).
 \end{enumerate}
@@ -888,11 +886,18 @@ All metrics are averaged over 20~executions under identical peer configurations.
     \label{fig:query-privacy}
 \end{figure*}
 
-The experimental results collectively demonstrate that the proposed BGV-based CPIR design achieves
-consistent end-to-end performance within practical bounds for permissioned blockchains. 
-Cryptographic evaluation (Table~\ref{tab:crypto-times}) shows that as $\log N$ increases from 13 to 15, 
-KeyGen latency roughly doubles and encryption and evaluation times grow proportionally to the ring size, 
-while decryption remains below~16~ms. 
+Table~\ref{tab:crypto-times} lists the measured execution time of core cryptographic operations 
+(\emph{KeyGen}, \emph{Enc}, \emph{Eval}, and \emph{Dec}) for each evaluated ring dimension~$\log N$. 
+Table~\ref{tab:artifact-sizes} summarizes the corresponding sizes of primary cryptographic artifacts, 
+including public and secret keys, ciphertexts ($ct_q$, $ct_r$), the encoded plaintext database 
+$m_{\mathrm{DB}}$, and auxiliary metadata. 
+On-chain network behavior is reported in Table~\ref{tab:pirquery-netio}, 
+which presents the average peer-side network I/O per \emph{PIRQuery} transaction 
+across the three channel configurations. 
+Measured chaincode execution times are provided in Table~\ref{tab:chaincode-timings},
+for \emph{InitLedger}, \emph{GetMetadata}, and \emph{PIRQuery} functions 
+under identical peer conditions. 
+Additionally, Figure \ref{fig:query-privacy} illustrates the peer- and client-side execution during a PIR query
 
 \begin{table}[!h]
     \caption{Execution Time of Cryptographic Operations (ms)}
@@ -908,14 +913,6 @@ while decryption remains below~16~ms.
     \hline
     \end{tabular}
 \end{table}
-
-Artifact size in (Fig.~\ref{fig:latency-stages}B) and Table~\ref{tab:artifact-sizes} scales linearly with the ring dimension $N$, 
-public and secret keys exhibit a 2$\times$ growth per level, consistent with BGV’s
-key structure. Ciphertexts ($ct_q$, $ct_r$) approximately double in size with each
-increment in $\log N$, while the plaintext polynomial \emph{$m_{DB}$} occupies
-roughly half of a ciphertext’s footprint. Metadata remains negligible in size
-($< 0.1$~KB).
-
 \begin{table}[!h]
     \caption{Size of Main Cryptographic Artifacts (KB)}
     \label{tab:artifact-sizes}
@@ -931,11 +928,21 @@ roughly half of a ciphertext’s footprint. Metadata remains negligible in size
     \end{tabular}
 \end{table}
 
-On-chain benchmarks (Table~\ref{tab:chaincode-timings}) reveal that 
-\emph{PIRQuery} consistently remains lightweight ($<$45~ms), 
-and read-only transactions avoid block creation overhead. 
-Overall, utilization above~99\% (Fig.~\ref{fig:latency-stages}C) confirms efficient slot packing across all channels, 
-while peer CPU and memory usage (Fig.~\ref{fig:blockchain-metrics}D–E) remain modest even under cryptographic load. 
+\begin{table}[!h]
+    \centering
+    \caption{Peer network I/O per PIRQuery (avg, KB/tx)}
+    \label{tab:pirquery-netio}
+    \begin{tabular}{|c|c|c|}
+    \hline
+    Channel & $\log N$ & NET I/O (KB/tx) \\
+    \hline
+    mini  & 13 & 524.62 \\
+    mid   & 14 & 1042.09 \\
+    rich  & 15 & 2072.88 \\
+    \hline
+    \end{tabular}
+\end{table}
+
 \begin{table}[!h]
     \caption{Average Chaincode Execution Time (ms)}
     \label{tab:chaincode-timings}
@@ -985,13 +992,57 @@ averaged across all three channel configurations.
 
 While the \emph{InitLedger} operation incurs higher cost due to state updates and ordering, 
 the end-to-end query workflow completes within $\approx$113~ms on average.
-Additionally, Figure \ref{fig:query-privacy} illustrates the peer- and client-side execution during a PIR query. 
-While the endorsing peer observes only the ciphertext size and ring parameters, the actual queried index 
-remains hidden.
 
-These results demonstrate the practicality of integrating CPIR based on the BGV scheme into 
-Hyperledger Fabric chaincode for privacy-preserving reads from world state database using the 
-ciphertext-plaintext multiplication in evaluate type transactions. 
+\textbf{Batched Queries.}
+Among our results, for the ring size $\log N{=}15$ configuration, issuing 100/1000/10000 private queries incurs 
+$\approx $207MB / 2.07 GB / 20.7 GB of peer-side network I/O with an associated chaincode evaluation time 
+of $\approx$0.07/0.67/6.73 minutes, respectively, when using our protocol, as shown in Table \ref{tab:batch-cost-rich} 
+and Figure \ref{fig:batch-cost-rich}.
+
+\begin{table}[!h]
+    \centering
+    \caption{Projected cost for batched PIR queries at $\log N{=}15$ (peer perspective)}
+    \label{tab:batch-cost-rich}
+    \begin{tabular}{|c|c|c|}
+    \hline
+    \# Transactions & Total Bandwidth (MB) & Total Time (min) \\
+    \hline
+    100   & 207.3  & 0.07 \\
+    1000  & 2073.0 & 0.67 \\
+    10000 & 20730.0 & 6.73 \\
+    \hline
+    \end{tabular}
+\end{table}
+
+\begin{figure}[!h] 
+    \centering 
+    \includegraphics[width=\columnwidth]{figures/plots/pirquery_batch_cost_bw.pdf} 
+    \caption{Projected cost for batched PIR queries at $\log N{=}15$ (peer perspective)} 
+    \label{fig:batch-cost-rich} 
+\end{figure}
+
+\noindent\textit{Remark (Why 2x to just $ct_q$ + $ct_r$?).} 
+The network I/O values in Table~\ref{tab:pirquery-netio} and Table~\ref{tab:batch-cost-rich} 
+were obtained from \emph{docker stats} snapshots collected for the 
+\emph{peer0.org1.example.com} and \emph{orderer0.group1.orderer.example.com} 
+containers during each benchmark epoch. 
+For every execution of \emph{PIRQuery}, the benchmarking script recorded 
+cumulative network statistics (\emph{NET~I/O}) before and after the transaction, 
+and the Python post-processing pipeline computed per-epoch deltas 
+(\emph{bytes\textsubscript{in/out}(t)}~--~\emph{bytes\textsubscript{in/out}(t--1)}) 
+to obtain the mean transfer volume per function. 
+Because the chaincode was deployed as an \emph{external service container}, 
+each PIR transaction traversed two gRPC hops: 
+(1)~client~$\leftrightarrow$~peer and 
+(2)~peer~$\leftrightarrow$~chaincode. 
+Each ciphertext---the query $ct_q$ and the response $ct_r$---flows in both directions across these links, 
+resulting in roughly four full transmissions per query. 
+This accounts for the observed aggregate of $\approx$2072~KB per transaction 
+for $\log N{=}15$, which aligns with the theoretical estimate 
+$4\times512\text{~KB}\,{=}\,2048\text{~KB}$ plus gRPC/TLS framing overhead. 
+If the same chaincode were executed \emph{in-process} (within the peer container), 
+only the client--peer exchange would occur, reducing the network footprint 
+to approximately $2\times512{=}$1024~KB per query or 10 GB for 10,000 queries.
 
 \section{DISCUSSION}\label{sec:discussion}
 
@@ -1006,30 +1057,6 @@ The comparison focuses on five key aspects:
 \emph{(iii)} the transaction phase in which privacy logic executes (\textsf{evaluate} vs. \textsf{submit}),
 \emph{(iv)} typical database or world-state size, and
 \emph{(v)} reported end-to-end (E2E) query latency when available.
-
-\begin{table*}[!ht]
-\centering
-\caption{Comparison with existing blockchain privacy frameworks}
-\label{tab:comparison-related}
-    \begin{tabular}{|c|l|c|c|c|c|c|}
-    \hline
-    \textbf{Work} & \textbf{Privacy Technique} & 
-    \textbf{Chaincode / Off-chain} & 
-    \textbf{Evaluate / Submit Phase} & 
-    \textbf{World State / DB Size} & 
-    \textbf{E2E Query Time (ms)} \\
-    \hline
-    \cite{xie_private_2023} & IT-PIR + ZKP & Off-chain service & Off-chain & No & No \\
-    \cite{chhabra_pribani_2024} & CPIR & Chaincode orchestration & Evaluate & No & No \\
-    \cite{chhabra_mudra_2025} & CPIR + Differential Privacy & Chaincode + off-chain & Evaluate & No & No \\
-    \cite{kumar_debpir_2025} & IT-PIR (OT-based) & Chaincode + off-chain peers & Evaluate & No & No \\
-    \cite{kumar_bron_2024} & CPIR + ZKP & Smart contract & Submit & No & No \\
-    \cite{xiao_cloak_2024} & Distributed IT-PIR & Hybrid contracts & Submit & No & No \\
-    \cite{mazmudar_peer2pir_2024} & IT-PIR + P2P privacy & Off-chain IPFS layer & Off-chain & No & No \\
-    \textbf{Ours} & \textbf{CPIR (lattice-based, BGV)} & \textbf{Chaincode} & \textbf{Evaluate} & \textbf{Yes} & \textbf{Yes} \\
-    \hline
-    \end{tabular}
-\end{table*}
 
 \noindent
 \textbf{Analysis.}
@@ -1047,62 +1074,139 @@ achieving an average query latency of approximately $113$~ms for world states of
 (256~KB total size). This includes both cryptographic and blockchain processing.
 To our knowledge, this is the first implementation to realize a 
 fully functional BGV-based CPIR entirely within Hyperledger Fabric chaincode, 
-achieving sub-200~ms end-to-end latency while preserving endorsement semantics.
+achieving sub-200~ms end-to-end under evaluate invocations in the query workflow.
 
-\subsection{LIMITATIONS}
+\begin{table*}[!h]
+    \centering
+    \caption{Comparison with existing blockchain privacy frameworks}
+    \label{tab:comparison-related}
+        \begin{tabular}{|c|c|c|c|c|c|c|}
+        \hline
+        \textbf{Work} &  
+        \shortstack{\textbf{Permissioned} / \\ \textbf{Permissionless}} &
+        \shortstack{\textbf{Privacy} / \\ \textbf{Technique}} &
+        \shortstack{\textbf{Chaincode} / \\ \textbf{Off-chain}} &
+        \shortstack{\textbf{Evaluate} / \\ \textbf{Submit Phase}} &
+        \shortstack{\textbf{World State }/ \\ \textbf{DB Size}} &
+        \shortstack{\textbf{E2E Query} / \\ \textbf{Time (ms)}} \\
+        \hline
+        \cite{xie_private_2023} & - & IT-PIR + ZKP & Off-chain service & Off-chain & - & - \\
+        \hline
+        \cite{chhabra_pribani_2024} & Permissioned  & CPIR & Chaincode orchestration & Evaluate & - & - \\
+        \hline
+        \cite{chhabra_mudra_2025} & Permissioned  & CPIR + Differential Privacy & Chaincode + off-chain & Evaluate & - & - \\
+        \hline
+        \cite{kumar_debpir_2025} & Permissioned  & IT-PIR (OT-based) & Chaincode + off-chain peers & Evaluate & - & - \\
+        \hline
+        \cite{kumar_bron_2024} & Permissioned  & CPIR + ZKP & Smart contract & Submit & - & - \\
+        \hline
+        \cite{xiao_cloak_2024} & -  & Distributed IT-PIR & Hybrid contracts & Submit & - & - \\
+        \hline
+        \cite{mazmudar_peer2pir_2024} & -  & IT-PIR + P2P privacy & Off-chain IPFS layer & Off-chain & - & - \\
+        \textbf{Ours} & Permissioned  & \textbf{CPIR (lattice-based, BGV)} & \textbf{Chaincode} & \textbf{Evaluate} & \textbf{Yes} & \textbf{Yes} \\
+        \hline
+        \end{tabular}
+\end{table*}
 
-While the proposed system achieves native query privacy within Hyperledger Fabric,
-several limitations remain that motivate further investigation.
+\subsection{FUTURE WORK AND OUTLOOK}
 
-\textbf{Leakage.}
-Although query indices remain hidden from endorsing peers, 
-side-channel leakages such as ciphertext size and response timing can still reveal coarse information about the query. 
-For instance, latency differences across channels or variable-size ciphertexts may 
-serve as indirect indicators of dataset size or record structure.
-Mitigating such leakages would require constant-time chaincode evaluation and standardized ciphertext serialization.
+While the proposed system demonstrates the feasibility of integrating CPIR directly 
+into Hyperledger Fabric’s chaincode layer for privacy-preserving queries, 
+several aspects remain open for further optimization and scalability improvements.
 
-\textbf{Scalability.}
-The current CPIR implementation exhibits linear complexity in the database size $n$,
-as each query involves homomorphic multiplication of the selection vector with the entire plaintext database polynomial $m_{\mathrm{DB}}$.
-While this remains acceptable for moderate-scale consortium datasets,
-larger deployments may require sharding or sublinear techniques such as preprocessing-based PIR or multi-stage hinting.
+\textbf{Leakage and timing resilience.}
+Although the query index remains cryptographically hidden from endorsing peers, 
+side-channel indicators such as ciphertext size and response latency may still 
+reveal coarse information about dataset scale or structure. 
+Future work should explore constant-time chaincode execution and standardized ciphertext 
+serialization to minimize observable timing and size variability.
 
-\textbf{Deployment considerations.}
-Integrating homomorphic operations within Fabric peers requires nontrivial dependencies and
-increased memory footprint for ciphertext handling.
-Although our results confirm that peer CPU and RAM utilization remain modest,
-production deployment would benefit from runtime optimizations and
-container-level isolation to decouple cryptographic workloads from standard Fabric endorsement logic.
-
-\subsection{FUTURE WORK}
+\textbf{Sublinear and sharded execution.}
+The current CPIR design maintains linear complexity in database size $n$, 
+as each query involves homomorphic multiplication of the selection vector with the 
+entire packed plaintext database $m_{\mathrm{DB}}$. 
+Scaling to larger consortium datasets will require integrating sharding or 
+sublinear approaches—such as preprocessing-based PIR, multi-stage hinting, 
+or offline initialization phases—to reduce online evaluation cost.
 
 \textbf{Encrypted-database mode.}
-An important next step is extending the current ciphertext–plaintext (ct×pt) evaluation to 
-an encrypted-database (ct×ct) mode.
-This would require relinearization keys, rotation and modulus-switching support,
-and could enable on-chain post-processing under encryption for richer query logic.
+Extending the ciphertext–plaintext (\emph{ct}×\emph{pt}) evaluation 
+to a fully encrypted-database (\emph{ct}×\emph{ct}) mode would 
+enable richer on-chain analytics under encryption. 
+This transition would necessitate the use of relinearization and rotation keys, 
+modulus-switching support, and careful parameter calibration to 
+preserve correctness and noise margins within Fabric’s resource limits.
 
 \textbf{Dynamic updates and record addition.}
-Adding an \textsf{addRecord} operation to the workflow would introduce new design challenges
-around database re-encoding, key refresh, and incremental packing.
-Such a feature would allow incremental ledger updates without reinitializing the entire $m_{\mathrm{DB}}$.
+Introducing an \textsf{addRecord} operation into the workflow 
+would allow incremental ledger updates without reinitializing 
+the entire $m_{\mathrm{DB}}$. 
+This raises new design questions around database re-encoding, key refresh, 
+and homomorphic consistency across epochs.
 
 \textbf{Selective field-level retrieval.}
-Another promising direction is adaptive packing, 
-where slot windows vary according to JSON field relevance.
-This would enable partial retrieval of structured records (e.g., fetching only metadata fields) 
-while preserving homomorphic correctness constraints.
+Adaptive packing strategies could allocate slot windows dynamically 
+based on JSON field relevance, enabling field-level access control 
+and partial record retrieval while maintaining algebraic correctness.
+
+\textbf{Deployment considerations.}
+From a system engineering perspective, integrating homomorphic encryption 
+within Fabric peers introduces bandwidth and serialization overheads. 
+In our setup, the external-chaincode deployment model caused 
+each query and response ciphertext (\emph{ct\textsubscript{q}}, \emph{ct\textsubscript{r}}) 
+to traverse two gRPC hops, effectively doubling network traffic per ciphertext. 
+Future implementations should investigate in-process or sidecar-based 
+execution models to reduce redundant communication and 
+improve overall throughput.
 
 \textbf{Dual-mode CPIR operation.}
-Beyond querying the current world state, 
-a dual-mode architecture could extend CPIR to blockchain history data, 
-allowing private access to past ledger states or block-level metadata.
-Such integration would support privacy-preserving analytics 
-and align with recent research priorities on private reads and verifiable computation in distributed ledgers~\cite{refMaze2024}.
-
+Finally, extending the architecture to support dual-mode queries—covering both 
+the current world state and historical ledger data—could enable 
+privacy-preserving analytics and provenance tracking. 
+Such a capability would align CPIR with emerging research on 
+private reads and verifiable computation in distributed ledgers~\cite{chhabra_navigating_2024}.
 
 \section{CONCLUSION}\label{sec:conclusion}
-The conclusion goes here.
+This work demonstrates that privacy-preserving query execution through computational private information retrieval (CPIR) 
+can be realized natively inside Hyperledger~Fabric’s chaincode layer. 
+By embedding a lattice-based BGV scheme directly within Fabric’s \textsf{evaluate} transaction path, 
+we show that it is possible to preserve query privacy without modifying the underlying blockchain consensus or storage layers.
+
+Our implementation achieves end-to-end query completion in $\approx$113~ms on average 
+for world states of 70–130 records (256~KB total), 
+and chaincode-level evaluation times below 45~ms even at $\log N{=}15$. 
+Cryptographic operations remain lightweight—key generation, encryption, and homomorphic evaluation 
+complete within 55~ms, 50~ms, and 65~ms respectively—while maintaining deterministic correctness 
+under the BGV parameter sets validated in Table~\ref{tab:params}. 
+Although ciphertexts grow linearly with the ring dimension (512~KB at $\log N{=}15$), 
+peer CPU and memory utilization remained modest throughout the experiments. 
+
+Network behavior, captured through \texttt{docker stats} instrumentation, 
+revealed a mean peer-side I/O of $\approx$2.0~MB per private query, 
+explained by the dual-hop communication pattern of the external chaincode architecture. 
+At this rate, 100, 1000, and 10{,}000 queries correspond to approximately 
+207~MB, 2.07~GB, and 20.7~GB of total peer network traffic, respectively. 
+While such throughput requirements may challenge large-scale deployments, 
+they remain acceptable in controlled consortium settings and can be 
+significantly reduced by adopting in-process or sidecar-based execution models.
+
+Overall, these results confirm the practicality of implementing CPIR 
+directly within a permissioned blockchain framework for privacy-preserving reads, 
+establishing a foundation for future research on scalable, efficient, and composable 
+private-query mechanisms over distributed ledgers. 
+Key directions for advancement include: (i)~constant-time chaincode evaluation and 
+standardized ciphertext serialization to mitigate side-channel leakage; 
+(ii)~sublinear or sharded CPIR constructions for scalability; 
+(iii)~encrypted-database (\emph{ct×ct}) evaluation for richer analytics; 
+and (iv)~deployment optimizations to minimize redundant communication 
+in peer–chaincode interactions. 
+
+In conclusion, our BGV-based CPIR-on-Fabric prototype illustrates that 
+cryptographically private queries can coexist with blockchain endorsement semantics, 
+achieving millisecond-scale latency for single queries and maintaining 
+chaincode modularity and auditability—paving the way toward 
+natively private data access in permissioned ledgers.
+
 
 %\section*{REFERENCES}
 
