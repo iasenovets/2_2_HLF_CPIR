@@ -1,0 +1,118 @@
+@startuml
+!theme plain
+skinparam linetype ortho
+skinparam defaultTextAlignment left
+
+skinparam rectangle {
+  BorderColor black
+}
+title Multi-Channel CPIR Architecture with BGV-Parameterized Channels
+
+actor "Data Requester (DR)" as Client
+
+frame "Hyperledger Fabric Network" as fr {
+  rectangle "Channel Mini" as CH_MINI {
+    rectangle "Endorsing peer (DO)" as DO_MINI {
+      component "Gateway (GW)\n(channel_mini_cpir)" as CCm
+      database "World State (WS): \nm_DB, \nn, \nrecord_s, \nbgv_params,\nrecord%03d..." as WSm
+      CCm -down-> WSm : PutState/GetState
+      note right of CCm
+        API:
+        + InitLedger()
+        + GetMetadata()
+        + PIRQuery()
+      end note
+
+
+      note right of WSm
+        Example JSON (mini):
+        {
+          "md5":"…",
+          "malware_family":"Emotet",
+          "threat_level":"High"
+        }
+      end note
+
+      note bottom of WSm
+        For maxJSON=64 → <math>"record"_s=64</math> → 128 records
+        For maxJSON=512 → <math>"record"_s=512</math> → 16 records
+      end note
+    }
+  }
+
+  rectangle "Channel Mid" as CH_MID {
+    rectangle "Endorsing peer (DO)" as DO_MID {
+      component "Gateway (GW)\n(channel_mid_cpir)" as CCx
+      database "World State (WS): \nm_DB, \nn, \nrecord_s, \nbgv_params,\nrecord%03d..." as WSx
+      CCx -down-> WSx : PutState/GetState
+      note right of CCx
+        API:
+        + InitLedger()
+        + GetMetadata()
+        + PIRQuery()
+      end note
+
+
+      note right of WSx
+        Example JSON (mid):
+        {
+          "md5":"…",
+          "sha256_short":"a3b9…",
+          "malware_class":"Trojan",
+          "malware_family":"Emotet",
+          "av_detects":17,
+          "threat_level":"High"
+        }
+      end note
+
+      note bottom of WSx
+        For maxJSON=64  → <math>"record"_s=64</math>  → 256 records
+        For maxJSON=512 → <math>"record"_s=512</math> → 32 records
+      end note
+    }
+  }
+
+  rectangle "Channel Rich" as CH_RICH {
+    rectangle "Endorsing peer (DO)" as DO_RICH {
+      component "Gateway (GW)\n(channel_rich_cpir)" as CCr
+      database "World State (WS): \nm_DB, \nn, \nrecord_s, \nbgv_params,\nrecord%03d..." as WSr
+      CCr -down-> WSr : PutState/GetState
+      note right of CCr
+        API:
+        + InitLedger()
+        + GetMetadata()
+        + PIRQuery()
+      end note
+
+      note right of WSr
+        Example JSON (rich):
+        {
+          "md5":"…",
+          "sha256":"a3b9cd56789123…",
+          "malware_class":"Trojan",
+          "malware_family":"Emotet",
+          "av_detects":17,
+          "threat_level":"High"
+        }
+      end note
+
+      note bottom of WSr
+        For maxJSON=64  → <math>"record"_s=64</math>  → 512 records
+        For maxJSON=512 → <math>"record"_s=512</math> → 64 records
+      end note
+    }
+  }
+}
+note bottom
+Common BGV parameters across channels:
+<math>logN=...,</math><math>N=...,</math> <math>logQi=[…], </math> <math>logPi=[…],</math> <math>t=65537</math> stored in key "bgv_params"
+
+World-state keys: 
+"m_DB", "n", "record_s", "bgv_params", "record%03d"
+end note
+
+
+Client --> CCm : Chaincode call
+Client --> CCx : Chaincode call
+Client --> CCr : Chaincode call
+@enduml

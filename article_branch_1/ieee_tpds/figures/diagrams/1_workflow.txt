@@ -1,0 +1,52 @@
+@startuml
+!theme plain
+skinparam linetype ortho
+skinparam defaultTextAlignment left
+skinparam sequenceArrowThickness 1.5
+skinparam sequenceParticipantPadding 30
+skinparam sequenceMessageAlign left
+autonumber
+
+title CPIR-Enabled Private Retrieval Workflow
+
+actor "Data Writer (DW)" as DW
+actor "Data Requester (DR)" as DR
+participant "Gateway (GW)" as GW
+participant "Data Owner (DO)" as DO
+database "World State (WS)" as WS
+
+== Ledger Initialization ==
+DW -> GW : Submit InitLedger()
+GW -> DO : InitLedger()
+activate DO
+DO -> DO : Build BGV Parameters
+DO -> DO : Generate Records
+DO -> WS : Store Records & Metadata
+DO -> DO : Encode Database (m_DB)
+DO -> WS : Store m_DB
+deactivate DO
+
+== Metadata Discovery ==
+DR -> GW : Evaluate GetMetadata()
+GW -> DO : GetMetadata()
+activate DO
+DO -> WS : Retrieve Metadata
+DO --> GW : Return Metadata
+deactivate DO
+GW --> DR : Metadata
+
+== Private Retrieval ==
+DR -> DR : Construct Query (i, Metadata)
+DR -> GW : Evaluate PIRQuery(ct_q)
+GW -> DO : PIRQuery(ct_q)
+activate DO
+DO -> WS : Load m_DB
+DO -> DO : Evaluate (ct_q, m_DB)
+DO --> GW : Return Result (ct_r)
+deactivate DO
+GW --> DR : Result (ct_r)
+
+== Decryption ==
+DR -> DR : Decrypt (ct_r)
+DR -> DR : Extract & Decode Record
+@enduml
