@@ -192,14 +192,17 @@ Hyperledger Fabric under \emph{evaluate} calls and achieve practical performance
 
 Hence, the main contributions of this work are:
 \begin{enumerate}
-    \item \textbf{The First Native PIR Integration for Private Reads in Fabric.}
-    We present the first end-to-end design, implementation, and evaluation of a HE-based PIR mechanism integrated \emph{directly} into Hyperledger Fabric 
-    chaincode. This allows clients to execute \emph{private read} operations from world state via \emph{evaluate} transactions, 
-    without leaking \emph{which} key was accessed to any endorsing peer. Our design requires no modifications to Fabric's core, 
-    proving the feasibility of a \emph{plug-in} privacy layer for state queries.
+    \item \textbf{Enabling Private Reads in Hyperledger Fabric.} 
+    We present the first end-to-end design and implementation of a native \emph{privacy layer for read operations} in Fabric, 
+    realized through a PIR-enabled chaincode that preserves Fabric’s endorsement and audit semantics. 
+    This mechanism allows endorsing peers to process encrypted queries without learning which key or record was accessed, 
+    introducing the concept of \emph{private reads} as a new privacy primitive for permissioned blockchains. 
+    Our integration requires no modifications to Fabric’s consensus or world-state management, demonstrating that private queries 
+    can coexist with standard endorsement logic.
     \item \textbf{Polynomial database construction.}
-    We derive necessary conditions on the cryptographic parameters, database size, and record structure to encode domain-specific 
-    structured key-value records into plaintext-polynomial format suitable for HE-based PIR, ensuring retrieval correctness and cryptographic feasibility.
+    We formalize the mapping between Fabric’s key–value world state and a homomorphically encodable polynomial database, 
+    deriving feasibility constraints that link record length, ring dimension, and slot allocation. 
+    These relationships ensure correctness of homomorphic retrieval and guide practical parameter selection for real-world datasets.
     \item \textbf{Multi-channel approach.} 
     To overcome database size limits imposed by polynomial packing constraints, we propose a multi-channel architecture 
     where each channel hosts a specific HE parameter set and corresponding polynomial database instance, 
@@ -208,8 +211,8 @@ Hence, the main contributions of this work are:
     We implement a prototype using the Lattigo~\cite{noauthor_lattigo_2024} library and benchmark cryptographic operations, 
     blockchain interactions, and end-to-end query latency under various configurations. Our results show that single-query latencies 
     remain practical for typical Fabric deployments.
-    \item \textbf{Open-Source Release.} To encourage reproducibility, we open-source the complete implementation of our PIR-enabled Fabric 
-    chaincode, client applications and benchmarks at the repository: \url{https://github.com/artias13/2_2_HLF_CPIR}.
+    \item \textbf{Open-Source Release.} To encourage reproducibility, we release the full implementation of our Fabric 
+    chaincode, client logic and benchmarks scripts-at: \url{https://github.com/artias13/2_2_HLF_CPIR}.
 \end{enumerate}
 
 \subsection{ORGANIZATION}
