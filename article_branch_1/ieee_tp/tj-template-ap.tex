@@ -80,7 +80,7 @@ Lei Liu~\orcidlink{0009-0001-3851-4854}\authorrefmark{2}}
 \section{INTRODUCTION}\label{sec:introduction}
 
 \subsection{MOTIVATION AND PROBLEM STATEMENT}
-Blockchain \cite{nakamoto_bitcoin_2008} is a peer-to-peer network protocols that uses cryptographic primitives and 
+Blockchain \cite{nakamoto_bitcoin_2008} is a peer-to-peer network protocol that uses cryptographic primitives and 
 consensus mechanism to create and maintain a distributed ledger of transactions, such as Ethereum \cite{wood_ethereum_2014} and 
 Hyperledger Fabric \cite{androulaki_hyperledger_2018}.
 
@@ -853,7 +853,7 @@ During evaluation, the average available memory was 6.9~GB with a 2~GB swap part
 and the root filesystem reported 946~GB of free space.
 
 The software stack consisted of Go~1.24.1, Docker~27.4.0, and Docker~Compose~v2.31.0, 
-hosting Hyperledger~Fabric~v2.5 with a single Raft orderer and LevelDB as the world-state database. 
+hosting Hyperledger~Fabric~v2.5 with a single Solo orderer and LevelDB as the world-state database. 
 Fabric’s ordering service used the recommended parameters 
 (\emph{BatchSize.AbsoluteMaxBytes}=99~MB, \emph{PreferredMaxBytes}=2~MB per block).
 
@@ -1192,32 +1192,33 @@ Future work will explore constant-time and sublinear execution, sharded CPIR arc
 \bibliographystyle{IEEEtran}
 \bibliography{bibliography}
 
-\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/arturiasenovets.jpg}}]
-{ARTUR IASENOVETS}~is currently pursuing the M.S. degree in the School of Cybersecurity and Information Law at the 
-Chongqing University of Posts and Telecommunications. His research interests include blockchain, privacy-enhancing technologies,
-and cyber threat intelligence.
+\newpage
+
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/arturiasenovets.jpg}}]{ARTUR IASENOVETS}
+~is currently pursuing the M.S. degree in the School of Cybersecurity and Information Law at the Chongqing University of Posts and Telecommunications. 
+His research interests include blockchain, privacy-enhancing technologies, and cyber threat intelligence.
 \end{IEEEbiography}
 
-\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/feitang.png}}]
-{FEI TANG}~received the Ph.D. degree in information security from the Institute of Information Engineering, 
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/feitang.png}}]{FEI TANG}
+~received the Ph.D. degree in information security from the Institute of Information Engineering, 
 Chinese Academy of Sciences, in 2015. He is currently a Professor with the Chongqing University of Posts and Telecommunications. 
 His research interests include public-key cryptography, data security, and so on.
 \end{IEEEbiography}
 
-\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/huihuizhu.jpg}}]
-{HUIHUI ZHU}~is currently working toward a Ph.D. degree in the School of Computer Science and Technology, 
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/huihuizhu.jpg}}]{HUIHUI ZHU}
+~is currently working toward a Ph.D. degree in the School of Computer Science and Technology, 
 Chongqing University of Posts and Telecommunications, Chongqing, China. His recent research interests include secure multi-party 
 computation and information security.
 \end{IEEEbiography}
 
-\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/pingwang.jpg}}]
-{PING WANG}~received her M.S. degree from Chongqing University of Posts and Telecommunications in 2022. She is currently pursuing a Ph.D. 
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/pingwang.jpg}}]{PING WANG}
+~received her M.S. degree from Chongqing University of Posts and Telecommunications in 2022. She is currently pursuing a Ph.D. 
 degree in the School of Computer Science and Technology at Chongqing University of Posts and Telecommunications. Her present research 
 interest includes privacy-preserving computing.
 \end{IEEEbiography}
 
-\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/leiliu.jpg}}]
-{LEI LIU}~received his M.S. degree in Integrated Circuit Engineering from Fuzhou University in 2018. He is currently pursuing 
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{figures/authors/leiliu.jpg}}]{LEI LIU}
+~received his M.S. degree in Integrated Circuit Engineering from Fuzhou University in 2018. He is currently pursuing 
 a Ph.D. degree in the School of Computer Science and Technology at Chongqing University of Posts and Telecommunications. 
 His research interests include data security and blockchain.
 \end{IEEEbiography}
