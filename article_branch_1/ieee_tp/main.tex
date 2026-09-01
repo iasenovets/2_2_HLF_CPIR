@@ -235,9 +235,8 @@ determine $R_Q$.
 \textbf{CPIR Definition.}
 Model the database as a vector $D=\{d_0,\dots,d_{n-1}\}$. To retrieve desired record $d_i$ without revealing $i$, 
 the client forms a one-hot selection vector $\hat{v}_i$ defined as $\hat{v}_i= (0,\dots,0,1,0,\dots,0)$ where $1$ 
-corresponds to the desired record at index $i$. 
-He then encrypts it as $ct_q = \emph{Enc}_{pk}(\hat{v}_i)$ under a public key $pk$ and sends $ct_q$ to the server, which computes 
-$ct_r = \emph{Eval}(ct_q, D) = \emph{Enc}_{pk}(d_i)$, returning $ct_r$ to the client for decryption $d_i = \emph{Dec}_{sk}(ct_r)$ 
+corresponds to the desired record at index $i$. He then encrypts it as $ct_q = \emph{Enc}_{pk}(\hat{v}_i)$ and sends $ct_q$ to the server,
+which computes $ct_r = \emph{Eval}(ct_q, D) = \emph{Enc}(d_i)$, returning $ct_r$ to the clientfor decryption $d_i = \emph{Dec}_{sk}(ct_r)$
 using his secret key $sk$, thus obtaining the desired record $d_i$ without revealing $i$ to the server, or peer in our case.
 
 \textbf{CPIR Instantiation:}
@@ -245,16 +244,17 @@ We instantiate Computational PIR as a tuple of algorithms (\emph{KeyGen},
 \emph{Enc}, \emph{Eval}, \emph{Dec}):
 \begin{itemize}
     \item $\emph{KeyGen}(\lambda) \rightarrow (pk, sk)$: On input the security parameter $\lambda$, output a public key $pk$ and a secret key $sk$.
-    \item $\emph{Enc}_{pk}(\hat{v}_i) \rightarrow ct_q$: Given a windowed selection vector $\hat{v}_i \in \{0,1\}^N$, 
-    encode it into the plaintext ring $R_T$ and encrypt to a query ciphertext $ct_q$ under $pk$.
+    \item $\emph{Enc}_{pk}(\hat{v}_i) \rightarrow ct_q$: Given a record-level one-hot selector $\hat{v}_i$, expand it into $v_i \in \{0,1\}^N$, then
+    encode it into the plaintext ring $R_T$, and encrypt it as $ct_q$ under $pk$.
     \item $\emph{Eval}(ct_q, \emph{$m_{DB}$}) \rightarrow ct_r$: Given $ct_q$ and the plaintext polynomial database $\emph{$m_{DB}$} \in R_T$, 
     homomorphically evaluate the product to obtain an encrypted response $ct_r \in R_Q$.
-    \item $\emph{Dec}_{sk}(ct_r) \rightarrow d_i$: Using the secret key $sk$, decrypt the response ciphertext $ct_r$ to recover the desired record $d_i$.
+    \item $\emph{Dec}_{sk}(ct_r) \rightarrow d_i$: Using secret key $sk$, decrypt and decode $ct_r$, then extract window $J_i$
+    to recover the desired record $d_i$.
 \end{itemize}
 
 \noindent \textbf{Correctness.} 
-Given a database $D=\{d_0,\dots,d_{n-1}\}$ stored as a plaintext polynomial \emph{$m_{DB}$} in $R_T$, for any index $i \in [n]$ 
-and its corresponding one-hot selector $\hat{v}_i$, the PIR scheme satisfies correctness if:
+Given a database $D=\{d_0,\dots,d_{n-1}\}$ stored as a plaintext polynomial \emph{$m_{DB}$} in $R_T$, for any index $i \in [n]$
+and its corresponding one-hot selector $\hat{v}_i$, with $\emph{Enc}$ and $\emph{Dec}$ understood as above, the PIR scheme satisfies correctness if:
 \[
 \emph{Dec}_{sk}\!\left(\emph{Eval}\!\left(\emph{Enc}_{pk}(\hat{v}_i), \emph{$m_{DB}$}\right)\right) = d_i.
 \]
@@ -286,15 +286,15 @@ We summarize the main notation used throughout the paper in Table~\ref{tab:notat
     \hline
     $D$ & Database records $\{d_0,\dots,d_{n-1}\}$ \\
     \hline
-    \emph{$m_{DB}$} & Plaintext polynomial \\ & representation of $D$ \\
+    \emph{$m_{DB}$} & Encoded plaintext polynomial \\ & representation of $D$ \\
     \hline
-    $\hat{v}_i$ & One-hot selector for index $i$ \\
+    $\hat{v}_i$ & Record-level one-hot selector for index $i$ \\
     \hline
-    ${v}_i$ & Windowed selector for index $i$ \\ & with $record_s$ contiguous ones \\
+    ${v}_i$ & Windowed logical-slot selector for index $i$ \\ & with $record_s$ contiguous ones \\
     \hline
-    ${c}$ & Coefficient vector $(c_0,\dots,c_{N-1})$ \\
+    ${c}$ & Logical-slot vector $(c_0,\dots,c_{N-1})$ \\
     \hline
-    $J_i$ & Disjoint window for index $i$ \\ 
+    $J_i$ & Disjoint logical-slot window for index $i$ \\
     \hline
     $\emph{Enc}_{pk}(\cdot)$, $\emph{Dec}_{sk}(\cdot)$ & Encrypt / Decrypt \\
     \hline
@@ -375,7 +375,7 @@ black-box computations, thereby enhancing overall privacy without requiring trus
 Our CPIR operates on the world state: \emph{$m_{DB}$} encodes the latest key--value snapshot, not the historical transaction logs.
 Both \emph{world state} and \emph{ledger} capacity concerns are addressed in Section~\ref{sec:preliminaries}.
 
-\subsection{SECURITY ASSUMPTIONS AND THREAT MODEL}
+\subsection{SECURITY ASSUMPTIONS AND THREAT MODEL}\label{sec:threat_model}
 
 Our design follows the standard \emph{honest-but-curious} adversarial model. 
 We explicitly consider the following assumptions and threats:
@@ -443,13 +443,13 @@ We first calculate the basic slot requirement and then apply a discrete rounding
 \label{eq:record_s}
 record_s = 8 \cdot \left\lceil \frac{record_b}{8 \cdot bytesPerSlot} \right\rceil,
 \end{equation}
-where $bytesPerSlot = \frac{\log_2(T)}{8}$ given plaintext modulus $T$. In our implementation, we set $T=256$, so $\log_2(256) = 8$ 
+where $bytesPerSlot = \frac{\log_2(T)}{8}$ given plaintext modulus $T$. With $T=256$, $\log_2(256) = 8$
 and thus $bytesPerSlot = 1$ byte. For example, if the largest record is $126$ bytes, then the basic requirement is $\lceil 126 / 1 \rceil = 126$ slots,
 and after discrete rounding $record_s = 8 \cdot \lceil 126 / 8 \rceil = 8 \cdot 16 = 128$ slots.
 
-\textbf{Step 3: Pack into Coefficient Vector.} 
+\textbf{Step 3: Pack into Logical Slot Vector.}
 Each serialized record $d_i$ is packed into its disjoint window $J_i = \{i \cdot record_s, \dots, (i+1) \cdot record_s - 1\}$ 
-in the coefficient vector $c = (c_0, c_1, \dots, c_{N-1})$:
+in the logical-slot vector $c = (c_0, c_1, \dots, c_{N-1})$:
 \begin{equation}
 \label{eq:packing}
 c[J_i[k]] = c[i \cdot record_s + k] = 
@@ -459,21 +459,23 @@ d_i[k] & \text{if } k < |d_i| \\
 \end{cases}
 \end{equation}
 for $i \in [n]$ and $k \in [0, record_s-1]$, where $d_i[k]$ denotes the $k$-th byte of record $d_i$,
-$J_i[k] = i \cdot record_s + k$ is the $k$-th slot index in window $J_i$ and
-$c_j \in [0,T-1]$ are polynomial coefficients.
+and $J_i[k] = i \cdot record_s + k$ is the $k$-th slot index in window $J_i$.
+Each $c_j \in [0,T-1]$ is the $j$-th coordinate of the logical-slot vector $c$.
 
 Padding zeros are added if a record is shorter than $record_s$. Thus each record $d_i$ occupies a contiguous slot interval that can 
 be privately retrieved through PIR.
 
-\textbf{Step 4: Encode into Polynomial.} 
-Finally, the coefficient vector $c$ is encoded into a plaintext polynomial:
+\textbf{Step 4: Encode into Plaintext Polynomial.}
+Finally, BGV batching encoder maps vector $c$ to a plaintext polynomial:
 \begin{equation}
 \label{eq:polynomial_db}
-\emph{$m_{DB}$}(X) = \sum_{j=0}^{N-1} c_j X^j \in R_T,
+\emph{$m_{DB}$}(X) = \sum_{j=0}^{N-1}\widetilde{c}_j X^j \in R_T,
 \end{equation}
-where $R_T = \mathbb{Z}_T[X]/(X^N+1)$. 
-This polynomial serves as the database representation \emph{$m_{DB}$} in the PIR protocol, which endorsing peers use during query evaluation and
-clients recover only the slots corresponding to their requested record.
+where $R_T = \mathbb{Z}_T[X]/(X^N+1)$. Here, $\widetilde{c}$ denotes the polynomial coefficients produced when BGV encodes
+the logical-slot vector $c$; generally, $\widetilde{c}\neq c$. Encoding the query with the same encoder makes $\emph{Eval}$ decode
+slotwise as $y_j=(v_i)_j c_j$.
+This polynomial serves as the database representation \emph{$m_{DB}$} in the PIR protocol, and the client extracts the logical slots
+corresponding to the requested record.
 
 \subsection{FEASIBILITY CONSTRAINTS}
 
@@ -518,7 +520,7 @@ Operationally, we restrict the slot window $record_s$ to a discrete set for impl
 \begin{equation}
     \label{eq:discrete_allocation}
     record_s \in \mathcal{S},
-    \mathcal{S} = \{64, 128, 224, 256, 384, 512\} \ \text{bytes}.
+    \mathcal{S} = \{64, 128, 224, 256, 384, 512\} \ \text{slots}.
 \end{equation}
 This means that only certain fixed slot sizes are allowed,
 simplifying client query construction and chaincode logic.
@@ -602,7 +604,7 @@ The detailed steps are as follows:
 
     \item \textbf{Pack and persist.}  
     Each $d_i$ is placed in a disjoint window $J_i=\{i\cdot record_s,\dots,(i+1)record_s-1\}$ of $c=(c_0,\dots,c_{N-1})$, 
-    zeros pad unused slots, and the polynomial $\emph{$m_{DB}$}(X)=\sum c_j X^j$ is encoded at max level. 
+    zeros pad unused slots, and $c$ is encoded into the plaintext polynomial $\emph{$m_{DB}$}(X)$ in~\eqref{eq:polynomial_db} at the maximum level.
     World state stores \emph{``m\_DB"}, \emph{``n"}, \emph{``record\_s"}, and \emph{``bgv\_params"} 
     plus optional \emph{``record\%03d"} entries. 
     
@@ -617,7 +619,7 @@ The detailed steps are as follows:
 
     \item \textbf{Form and encrypt query.}  
     For index $i\in[n]$, $\mathcal{DR}$ runs \texttt{FormSelectionVector} (Alg.~S3): 
-    define $J_i$, set ${v}_i$ with ones on $J_i$, encode to $m_q(X)$, encrypt as $ct_q=\emph{Enc}_{pk}({v}_i)$, 
+    define $J_i$, set ${v}_i$ with ones on $J_i$, encode it as $m_q\in R_T$, encrypt as $ct_q=\emph{Enc}_{pk}(m_q)$,
     and serialize/Base64-encode. 
 
     \item \textbf{PIR query evaluation.}  
@@ -626,7 +628,7 @@ The detailed steps are as follows:
     $ct_r=\emph{Eval}(ct_q,\emph{$m_{DB}$})$, returning the Base64-encoded ciphertext.   
 
     \item \textbf{Decryption and reconstruction.}  
-    $\mathcal{DR}$ runs \texttt{DecryptResult} (Alg.~S5) to recover $m'(X)$, 
+    $\mathcal{DR}$ runs \texttt{DecryptResult} (Alg.~S5) to recover response plaintext $m'(X)$, decode it into $c$,
     extract bytes from $J_i$, stop at padding zero, and reconstruct $d_i$.
 
 \end{enumerate}
@@ -636,7 +638,7 @@ The proposed system currently supports windowed selection vectors for single-rec
 Extending to multi-record queries is feasible by modifying the selection vector to include multiple $J_i$.
 
 \section{SECURITY ANALYSIS}\label{sec:security}
-We now demonstrate how our construction satisfies the security objective defined in Section~\ref{sec:proposed_system}B 
+We now demonstrate how our construction satisfies the security objective defined in Section~\ref{sec:proposed_system}-\ref{sec:threat_model}
 by reduction to the IND-CPA~\cite{noauthor_ciphertext_2025} security of the BGV scheme~\cite{cryptoeprint:2011/277} 
 (implemented via Lattigo~\cite{noauthor_lattigo_2024}) under the RLWE assumption~\cite{peikert_lattice_2014}. 
 Our system implements a single-server, single-round HE-based PIR construction by tailoring
@@ -645,48 +647,49 @@ windowed-slot variant designed for the Hyperledger Fabric chaincode environment.
 This construction relies on the security guarantees of BGV and RLWE, which we leverage in our proof below.
 
 \emph{Proof.}
-Under the BGV scheme~\cite{cryptoeprint:2011/277}, the encrypted query $ct_q = \emph{Enccoro}_{pk}(m_q)$ is a noisy ciphertext of the form
+Under the BGV scheme~\cite{cryptoeprint:2011/277}, the encrypted query $ct_q = \emph{Enc}_{pk}(m_q)$ is a noisy ciphertext of the form
 $ct_q = (c_0, c_1) = (pk_0 \cdot u + T \cdot e_0 + m_q, pk_1 \cdot u + T \cdot e_1) \in R_Q \times R_Q$
-that stores the selection mask polynomial $m_q \in R_T$ (encoding the selection vector $v_i \in \{0,1\}^N$). Here,
-$u \leftarrow R_Q$ is uniformly random, $e_{pk},e_0,e_1 \leftarrow \mathcal{X}$ are small noise polynomials, and $pk = (pk_0, pk_1) = 
-(a \cdot sk + T \cdot e_{pk}, -a)$ is the public key, where $a \leftarrow R_Q$ is uniformly random and $sk \leftarrow \mathcal{X}$ is the 
-secret key. Since $m_q$ is hidden by the random term $u$ and the scaled noise $T \cdot e_0$, $ct_q$ is computationally indistinguishable from a
-uniformly random element of $R_Q \times R_Q$ to any adversary $\mathcal{A}$ running in time $poly(\lambda)$ without the secret key $sk$. Thus,
-$ct_q$ reveals no information about the underlying plaintext coefficients or their positions in $m_q$.
+that stores the encoded selection mask $m_q \in R_T$ for logical-slot selector $v_i \in \{0,1\}^N$. Here,
+$u\leftarrow\mathcal{X}_s$, $e_{pk},e_0,e_1\leftarrow\mathcal{X}_e$ are small polynomials drawn from
+the secret and error distributions, respectively, and $pk = (pk_0, pk_1) = (a \cdot sk + T \cdot e_{pk}, -a)$ is the public key,
+where $a \leftarrow R_Q$ is uniformly random and $sk \leftarrow \mathcal{X}_s$ is the secret key. Since $m_q$ is hidden by the fresh
+terms $(pk_0\cdot u+T\cdot e_0)$ and $(pk_1\cdot u+T\cdot e_1)$, under RLWE we have $ct_q \approx_c U$ for any adversary $\mathcal{A}$ running in
+time $poly(\lambda)$ without the secret key $sk$, where $U\leftarrow R_Q \times R_Q$ is a uniformly random element.
+Thus, $ct_q$ reveals no information about $m_q$ or its selected logical-slot window $J_i$.
 
 \emph{Indistinguishability Game.}
 Consider an adversary $\mathcal{A}$ running in time $poly(\lambda)$ and controlling an honest-but-curious endorsing peer $\mathcal{DO}$.
-The adversary $\mathcal{A}$ selects two indices $i,j \in [n]$, corresponding to mask polynomials $m_{q,i}$ and $m_{q,j}$ 
-(encoding $v_i$ and $v_j$ respectively) with coefficients set to $1$ on slots $J_i$ or $J_j$ and $0$ elsewhere.
+The adversary $\mathcal{A}$ selects two indices $i,j \in [n]$, corresponding to mask polynomials $m_{q,i}$ and $m_{q,j}$ obtained by
+encoding $v_i$ and $v_j$, whose logical slots are set to $1$ on $J_i$ or $J_j$ and $0$ elsewhere.
 A challenger $\mathcal{C}$ samples a random bit $b \leftarrow \{0,1\}$ and sets
 $m_{q,b} = m_{q,i}$ if $b=0$, or $m_{q,b} = m_{q,j}$ if $b=1$. $\mathcal{C}$ then encrypts the query
 $ct_q \gets \emph{Enc}_{pk}(m_{q,b})$ and evaluates the protocol to obtain $ct_r = \emph{Eval}(ct_q, m_{DB})$. 
 After this, $\mathcal{C}$ provides the view $View_{\mathcal{A}} = \{ct_q, ct_r, m_{DB}, pp, \mathcal{L}\}$ to $\mathcal{A}$. 
 Finally, $\mathcal{A}$ outputs a bit $b'$ and wins if $b' = b$.
 Since $ct_q$ is obtained through IND-CPA secure $\emph{Enc}_{pk}(\cdot)$ and $ct_r$ is the result of a deterministic $\emph{Eval}(\cdot)$ 
-using only $pp$ and $m_{DB}$, the distribution of $View_{\mathcal{A}}$ depends on $b$ only through the underlying $m_{q,b}$.
+using $ct_q$, $pp$ and $m_{DB}$, the distribution of $View_{\mathcal{A}}$ depends on $b$ only through the underlying $m_{q,b}$.
 Hence, any $\mathcal{A}$ running in time $poly(\lambda)$ capable of distinguishing $View_{\mathcal{A}}^{(i)}$ from 
 $View_{\mathcal{A}}^{(j)}$ with non-negligible advantage can be reduced to an $\mathcal{A'}$ that breaks the IND-CPA security of the BGV scheme 
 with the same advantage. This contradicts the RLWE assumption~\cite{peikert_lattice_2014}. Thus, we conclude\footnote{See App.~6 
 in~\cite{mahdavi_inspire_2025} and Cor.~2 in~\cite{simplepir_2023} for similar \emph{formal} proofs.} query indistinguishability 
-under the $(N,Q,\mathcal{X},T)$-RLWE assumption for any $\mathcal{A}$ running in time $poly(\lambda)$ to be:
-$\left| \Pr[b' = b] - \tfrac{1}{2} \right| \le negl(\lambda)$.
+under the $(N,Q,\mathcal{X}_{s,e},T)$-RLWE assumption for any $\mathcal{A}$ running in time $poly(\lambda)$ to be:
+$\Pr[b' = b] \leq \tfrac{1}{2} + negl(\lambda)$.
 
 \emph{Corollary 1 (Single Read Privacy).} 
-For a single query, an adversary $\mathcal{A}$ cannot recover the index $i$ or the data $d_i$, as the view reveals no information about the 
-position of the bit in the selection vector $v_i$ beyond what is permitted in $\mathcal{L}$, reducing the probability of a successful 
-guess to $\Pr[\mathcal{A}(View_{\mathcal{A}}) \in \{i, d_i\}] \le negl(\lambda)$.
+For a single query with uniformly sampled $i\in[n]$, an adversary $\mathcal{A}$ cannot recover $i$ or determine which $d_i$ is requested, since the view reveals
+no information about the position of the bit ($J_i$) in $v_i$ beyond what is permitted in $\mathcal{L}$, and hence its guessing probability satisfies
+$\Pr[\mathcal{A}(View_{\mathcal{A}}) \in \{(i,d_i)\}] \leq \tfrac{1}{n} + negl(\lambda)$.
 
 \emph{Corollary 2 (Repeated Reads).}
-(1) Following the proof above, any $\mathcal{A}$ views each $ct_q^{(t)} \approx_c ct_q^{(t')}$,
-for any $i,j \in [n]$ and any round $t,t' \in \mathbb{N}$ (even if $i = j$ and/or $t \neq t'$). 
-By a standard hybrid argument, any $\mathcal{A}$ running in time $poly(\lambda)$ sees 
-$View_{\mathcal{A}}(\mathcal{Q}) \approx_c View_{\mathcal{A}}(\mathcal{Q}')$ for any two query sequences $\mathcal{Q}, \mathcal{Q}'$ 
+(1) Following the proof above, any $\mathcal{A}$ views each $ct_{q,i}^{(t)} \approx_c ct_{q,j}^{(t')}$,
+for any $i,j \in [n]$ and any round $t,t' \in \mathbb{N}$ (even if $i = j$ and/or $t \neq t'$).
+By a standard hybrid argument, any $\mathcal{A}$ running in time $poly(\lambda)$ sees
+$View_{\mathcal{A}}(\mathcal{Q}) \approx_c View_{\mathcal{A}}(\mathcal{Q}')$ for any two query sequences $\mathcal{Q}, \mathcal{Q}'$
 of equal length.
 (2) Each evaluation $ct_r^{(t)} = \emph{Eval}(ct_q^{(t)}, m_{DB})$ involves
-a uniform ciphertext--plaintext multiplication of $ct_q^{(t)} = \emph{Enc}_{pk}(m_q^{(t)})=\emph{enc}^{poly}({v_{i}^{(t)}})$ with 
-$m_{DB}$ over $R_Q$. This operation processes every coefficient of $m_{DB}$ regardless of the mask $m_q^{(t)}$ and its $J_{i}^{(t)}$,
-revealing nothing about $i$ beyond $\mathcal{L}$ for any $\mathcal{A}$ running in time $poly(\lambda)$.
+a ciphertext--plaintext multiplication of $ct_q^{(t)}=\emph{Enc}_{pk}(m_q^{(t)})$
+with $m_{DB}$ over $R_Q$. This operation is independent of the mask $m_q^{(t)}$ and its corresponding $J_i^{(t)}$;
+by (1), the resulting view reveals nothing about $i$ beyond $\mathcal{L}$ to any $\mathcal{A}$ running in time $poly(\lambda)$.
 
 \section{PERFORMANCE EVALUATION}\label{sec:evaluation}
 \subsection{EXPERIMENTAL SETUP}
